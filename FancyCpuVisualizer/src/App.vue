@@ -9,11 +9,14 @@
 
       <div 
         class="canvas-panel" 
-        @mousedown="startPan" 
+        tabindex="0"
+        @mousedown.prevent="handleMouseDown" 
         @mousemove="handleMouseMove" 
         @mouseup="handleMouseUp"
         @mouseleave="handleMouseUp"
-        @wheel.prevent="handleWheel"  :style="{ cursor: isPanning ? 'grabbing' : 'grab' }"
+        @wheel.prevent="handleWheel"
+        @keydown="handleKeyDown"
+        :style="{ cursor: isPanning ? 'grabbing' : 'default' }"
       >
         <h3>Renderer View (Zoom: {{ Math.round(zoom * 100) }}%)</h3>
         
@@ -21,8 +24,6 @@
           class="viewport" 
           :style="{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }"
         >
-        
-        <div class="helper-text">Scroll to Zoom • Drag to Pan</div>
           <svg class="wires-layer">
             <path 
               v-for="(wire, i) in wiresPaths" 
@@ -39,14 +40,18 @@
             v-for="comp in systemState.components" 
             :key="comp.id"
             :comp="comp"
+            :is-selected="selectedIds.has(comp.id)" 
             @startDrag="startDrag"
           />
+          
+          <div v-if="selectionBox" class="selection-box" :style="selectionBoxStyle"></div>
         </div>
         
-        <div class="helper-text">Drag empty space to pan</div>
+        <div class="helper-text">
+          Ctrl+Click/Drag to Select • Drag Space to Pan • Scroll to Zoom
+        </div>
       </div>
-    </div>
-    <ControlPanel />
+    </div> <ControlPanel />
   </div>
 </template>
 
@@ -57,31 +62,42 @@ import { ChipRegistry } from './registry';
 import ControlPanel from './components/ControlPanel.vue';
 import CircuitBlock from './components/CircuitBlock.vue';
 
-// --- HDL 相關 ---
+// --- HDL 相關 (維持不變) ---
 const hdlCode = ref(`
-INPUT Sel 300 50
+INPUT zx 50 50
+INPUT nx 100 50
+INPUT zy 150 50
+INPUT ny 200 50
+INPUT f  250 50
+INPUT no 300 50
 
-INPUT A0 50 50
-INPUT A1 50 100
-INPUT A2 50 150
-INPUT A3 50 200
+INPUT X0 50 150
+INPUT X1 50 200
+INPUT X2 50 250
+INPUT X3 50 300
 
-INPUT B0 50 300
-INPUT B1 50 350
-INPUT B2 50 400
-INPUT B3 50 450
+INPUT Y0 50 400
+INPUT Y1 50 450
+INPUT Y2 50 500
+INPUT Y3 50 550
 
-MUX_4_BIT myMux4 400 150
+ALU_4_BIT ALU 450 200
 
-WIRE Sel myMux4 Sel
-WIRE A0 myMux4 A0
-WIRE A1 myMux4 A1
-WIRE A2 myMux4 A2
-WIRE A3 myMux4 A3
-WIRE B0 myMux4 B0
-WIRE B1 myMux4 B1
-WIRE B2 myMux4 B2
-WIRE B3 myMux4 B3
+WIRE zx ALU zx
+WIRE nx ALU nx
+WIRE zy ALU zy
+WIRE ny ALU ny
+WIRE f  ALU f
+WIRE no ALU no
+
+WIRE X0 ALU X0
+WIRE X1 ALU X1
+WIRE X2 ALU X2
+WIRE X3 ALU X3
+WIRE Y0 ALU Y0
+WIRE Y1 ALU Y1
+WIRE Y2 ALU Y2
+WIRE Y3 ALU Y3
 `);
 
 function runAssembler() { assembleCode(hdlCode.value); }
@@ -90,33 +106,103 @@ function runAssembler() { assembleCode(hdlCode.value); }
 const pan = reactive({ x: 0, y: 0 });
 const zoom = ref(1);
 const isPanning = ref(false);
-const lastMousePos = { x: 0, y: 0 };
-let draggingComp = null;
-let offsetX = 0; let offsetY = 0;
 
-function startPan(event) {
-  if (event.target.classList.contains('canvas-panel') || event.target.classList.contains('viewport')) {
+// 選取功能相關狀態
+const selectedIds = ref(new Set());
+const isBoxSelecting = ref(false);
+const selectionStart = { x: 0, y: 0 };
+const selectionBox = ref(null);
+
+// 拖曳相關
+const lastMousePos = { x: 0, y: 0 };
+let isDraggingComp = false;
+
+// 🟢 輔助函式：取得滑鼠相對於畫布(Canvas Panel)的座標
+function getRelativeMousePos(event) {
+  // 嘗試抓取 canvas-panel，如果 event target 本身就是最好
+  const panel = document.querySelector('.canvas-panel');
+  if (!panel) return { x: event.clientX, y: event.clientY };
+  
+  const rect = panel.getBoundingClientRect();
+  return {
+    x: event.clientX - rect.left, // 扣除左側編輯器的寬度
+    y: event.clientY - rect.top   // 扣除頂部的高度
+  };
+}
+
+function handleMouseDown(event) {
+  if (event.target.closest('.component-wrapper')) return;
+
+  lastMousePos.x = event.clientX;
+  lastMousePos.y = event.clientY;
+
+  if (event.ctrlKey) {
+    isBoxSelecting.value = true;
+    
+    // 🟢 修正：使用相對座標來計算起點
+    const rel = getRelativeMousePos(event);
+    const worldX = (rel.x - pan.x) / zoom.value;
+    const worldY = (rel.y - pan.y) / zoom.value;
+    
+    selectionStart.x = worldX;
+    selectionStart.y = worldY;
+    selectionBox.value = { x: worldX, y: worldY, w: 0, h: 0 };
+  } else {
     isPanning.value = true;
-    lastMousePos.x = event.clientX;
-    lastMousePos.y = event.clientY;
+    selectedIds.value.clear();
+    selectionBox.value = null;
   }
 }
 
 function startDrag(event, comp) {
-  draggingComp = comp;
-  offsetX = event.clientX - pan.x - comp.x;
-  offsetY = event.clientY - pan.y - comp.y;
+  event.stopPropagation();
+  lastMousePos.x = event.clientX;
+  lastMousePos.y = event.clientY;
+  isDraggingComp = true;
+
+  if (event.ctrlKey) {
+    if (selectedIds.value.has(comp.id)) selectedIds.value.delete(comp.id);
+    else selectedIds.value.add(comp.id);
+  } else if (!selectedIds.value.has(comp.id)) {
+    selectedIds.value.clear();
+    selectedIds.value.add(comp.id);
+  }
 }
 
 function handleMouseMove(event) {
+  const deltaX = event.clientX - lastMousePos.x;
+  const deltaY = event.clientY - lastMousePos.y;
+  lastMousePos.x = event.clientX;
+  lastMousePos.y = event.clientY;
+
   if (isPanning.value) {
-    pan.x += event.clientX - lastMousePos.x;
-    pan.y += event.clientY - lastMousePos.y;
-    lastMousePos.x = event.clientX;
-    lastMousePos.y = event.clientY;
-  } else if (draggingComp) {
-    draggingComp.x = event.clientX - offsetX - pan.x;
-    draggingComp.y = event.clientY - offsetY - pan.y;
+    pan.x += deltaX;
+    pan.y += deltaY;
+  } 
+  else if (isDraggingComp) {
+    const moveX = deltaX / zoom.value;
+    const moveY = deltaY / zoom.value;
+
+    selectedIds.value.forEach(id => {
+      const comp = systemState.components.find(c => c.id === id);
+      if (comp) {
+        comp.x += moveX;
+        comp.y += moveY;
+      }
+    });
+  }
+  else if (isBoxSelecting.value) {
+    // 🟢 修正：使用相對座標來更新選取框
+    const rel = getRelativeMousePos(event);
+    const currentWorldX = (rel.x - pan.x) / zoom.value;
+    const currentWorldY = (rel.y - pan.y) / zoom.value;
+
+    const x = Math.min(selectionStart.x, currentWorldX);
+    const y = Math.min(selectionStart.y, currentWorldY);
+    const w = Math.abs(currentWorldX - selectionStart.x);
+    const h = Math.abs(currentWorldY - selectionStart.y);
+    
+    selectionBox.value = { x, y, w, h };
   }
 }
 
@@ -124,69 +210,80 @@ function handleWheel(event) {
   if (!event.target.closest('.canvas-panel')) return;
   
   const zoomIntensity = 0.1;
-  const direction = event.deltaY > 0 ? -1 : 1; // 滾輪向下縮小，向上放大
+  const direction = event.deltaY > 0 ? -1 : 1;
   const factor = 1 + (direction * zoomIntensity);
-  
-  // 限制縮放範圍 (0.2倍 ~ 5倍)
   const newZoom = Math.max(0.2, Math.min(5, zoom.value * factor));
   
-  // 計算滑鼠相對於視圖的偏移量，讓縮放是以滑鼠游標為中心
-  const mouseX = event.clientX;
-  const mouseY = event.clientY;
+  // 🟢 修正：縮放中心點也必須使用相對座標 (防止縮放時畫面漂移)
+  const rel = getRelativeMousePos(event);
   
-  // 數學魔法：調整 Pan 讓畫面不會亂跑
-  pan.x = mouseX - (mouseX - pan.x) * (newZoom / zoom.value);
-  pan.y = mouseY - (mouseY - pan.y) * (newZoom / zoom.value);
+  pan.x = rel.x - (rel.x - pan.x) * (newZoom / zoom.value);
+  pan.y = rel.y - (rel.y - pan.y) * (newZoom / zoom.value);
   
   zoom.value = newZoom;
 }
 
 function handleMouseUp() {
+  if (isBoxSelecting.value && selectionBox.value) {
+    const box = selectionBox.value;
+    systemState.components.forEach(comp => {
+      const compW = comp.expanded ? 300 : 100;
+      const compH = comp.expanded ? 200 : 80;
+      
+      if (comp.x < box.x + box.w &&
+          comp.x + compW > box.x &&
+          comp.y < box.y + box.h &&
+          comp.y + compH > box.y) {
+        selectedIds.value.add(comp.id);
+      }
+    });
+  }
+
   isPanning.value = false;
-  draggingComp = null;
+  isDraggingComp = false;
+  isBoxSelecting.value = false;
+  selectionBox.value = null;
 }
 
-// --- 連線計算 ---
+const selectionBoxStyle = computed(() => {
+  if (!selectionBox.value) return {};
+  return {
+    left: selectionBox.value.x + 'px',
+    top: selectionBox.value.y + 'px',
+    width: selectionBox.value.w + 'px',
+    height: selectionBox.value.h + 'px'
+  };
+});
+
+// --- 連線計算 (維持不變) ---
 const wiresPaths = computed(() => {
   return systemState.wires.map(wire => {
     const startComp = systemState.components.find(c => c.id === wire.from);
     const endComp = systemState.components.find(c => c.id === wire.to);
     if (!startComp || !endComp) return { path: '', active: false };
 
-    // 1. 起點
     const startW = startComp.expanded ? getCompSize(startComp).w : 100;
     const startX = startComp.x + startW; 
     let startY = startComp.y + 40;
 
-    // 2. 終點 (對齊 Input Wall)
     const endX = endComp.x;
     let endY = endComp.y + 40; 
 
     if (endComp.expanded) {
       const inputs = ChipRegistry[endComp.type]?.inputs || [];
       const pinIndex = inputs.indexOf(wire.from); 
-      
-      if (pinIndex !== -1) {
-        // 黃金公式： Header(35) + LabelCenter(30) = 65
-        endY = endComp.y + 65 + (pinIndex * 60);
-      } else {
-        endY = endComp.y + 65;
-      }
+      if (pinIndex !== -1) endY = endComp.y + 65 + (pinIndex * 60);
+      else endY = endComp.y + 65;
     } else {
-      // 收合時分散連線
       const inputs = ChipRegistry[endComp.type]?.inputs || [];
       const pinIndex = inputs.indexOf(wire.from);
       if (pinIndex === 0) endY = endComp.y + 20;
       else if (pinIndex > 0) endY = endComp.y + 60;
     }
 
-    // 3. 狀態
     let isActive = false;
-    if (wire.fromPin && startComp.outputStates) {
-      isActive = startComp.outputStates[wire.fromPin] === 1;
-    } else {
-      isActive = startComp.value === 1;
-    }
+    if (wire.fromPin && startComp.outputStates) isActive = startComp.outputStates[wire.fromPin] === 1;
+    else isActive = startComp.value === 1;
 
     const cp1X = startX + 80;
     const cp2X = endX - 80;
@@ -288,7 +385,17 @@ button, input, select, textarea {
   position: relative; 
   background: #121212; /* 更深的背景 */
   overflow: hidden; 
-  color: #fff; 
+  color: #fff;
+  user-select: none; /* 🚫 禁止選取文字 */
+  outline: none;
+}
+
+.selection-box {
+  position: absolute;
+  border: 1px solid #00a8ff;
+  background-color: rgba(0, 168, 255, 0.2);
+  pointer-events: none; /* 讓滑鼠事件穿透 */
+  z-index: 9999;
 }
 
 .canvas-panel { flex-grow: 1; position: relative; background: #222; overflow: hidden; color: #fff; }

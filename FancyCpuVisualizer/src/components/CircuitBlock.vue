@@ -4,10 +4,15 @@
     :style="{ left: comp.x + 'px', top: comp.y + 'px', zIndex: isActive ? 999 : 10 }"
     @mousedown.stop="handleMouseDown"
   >
-    <div 
+   <div 
       v-if="!comp.expanded"
       class="component-box"
-      :class="{ 'on': Number(comp.value) === 1, 'is-custom': !!comp.internals, 'is-input': comp.type === 'INPUT' }"
+      :class="{ 
+        'on': Number(comp.value) === 1, 
+        'is-custom': !!comp.internals, 
+        'is-input': comp.type === 'INPUT',
+        'selected': isSelected  /* ✨ 新增這行 */
+      }"
       @mousedown.stop="$emit('startDrag', $event, comp)"
     >
       <div class="header">{{ comp.type }}</div>
@@ -74,7 +79,7 @@ export default { name: 'CircuitBlock' }
 import { ref, computed } from 'vue';
 import { ChipRegistry } from '../registry';
 
-const props = defineProps(['comp']);
+const props = defineProps(['comp', 'isSelected']);
 const emit = defineEmits(['startDrag']);
 
 // --- Utils ---
@@ -100,27 +105,51 @@ function getCompSize(c) {
   return { w: maxW + 100, h: maxH + 50 };
 }
 
-const dynamicStyle = computed(() => {
+const dynamicStyle = computed(() =>   {
   const size = getCompSize(props.comp);
   return { width: size.w + 'px', height: size.h + 'px' };
 });
 
 // --- Drag ---
 let draggingSubComp = null;
-let dragOffsetX = 0; let dragOffsetY = 0;
+let lastInternalMouseX = 0;
+let lastInternalMouseY = 0;
 function handleInternalDrag(event, subComp) {
+  // 1. 記錄當前要拖曳的子元件
   draggingSubComp = subComp;
-  dragOffsetX = event.clientX - subComp.x;
-  dragOffsetY = event.clientY - subComp.y;
+  
+  // 2. 記錄滑鼠起始位置
+  lastInternalMouseX = event.clientX;
+  lastInternalMouseY = event.clientY;
+  
   window.addEventListener('mousemove', onInternalMouseMove);
   window.addEventListener('mouseup', onInternalMouseUp);
 }
+
 function onInternalMouseMove(event) {
   if (draggingSubComp) {
-    draggingSubComp.x = event.clientX - dragOffsetX;
-    draggingSubComp.y = event.clientY - dragOffsetY;
+    // 3. 計算滑鼠移動的差值 (Delta)
+    const deltaX = event.clientX - lastInternalMouseX;
+    const deltaY = event.clientY - lastInternalMouseY;
+    
+    // 4. 更新最後位置，供下次計算使用
+    lastInternalMouseX = event.clientX;
+    lastInternalMouseY = event.clientY;
+
+    // 5. ⚡️ 關鍵修復：自動計算目前的縮放比例 ⚡️
+    // 我們透過元件的實際寬度 (getBoundingClientRect) 除以 原始寬度 (offsetWidth) 來反推 Zoom 值
+    // 這樣 CircuitBlock 不需要知道外部的 zoom 變數，也能算出正確的比例
+    const el = event.target.closest('.expanded-container') || event.target;
+    // 如果找不到，預設為 1 (保險起見)
+    const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    const currentScale = rect ? (rect.width / el.offsetWidth) : 1;
+
+    // 6. 應用修正後的位移量
+    draggingSubComp.x += deltaX / currentScale;
+    draggingSubComp.y += deltaY / currentScale;
   }
 }
+
 function onInternalMouseUp() {
   draggingSubComp = null;
   window.removeEventListener('mousemove', onInternalMouseMove);
@@ -365,4 +394,11 @@ const allInternalWires = computed(() => {
 .mini-pin-row { display: flex; gap: 3px; position: absolute; bottom: -5px; }
 .mini-pin { width: 6px; height: 6px; border-radius: 50%; background: #555; }
 .mini-pin.on { background: #0f0; box-shadow: 0 0 3px #0f0; }
+
+/* ✨ 新增：選取狀態的高亮樣式 */
+.component-box.selected,
+.expanded-container.selected {
+  outline: 2px solid #00a8ff; /* 亮藍色外框 */
+  box-shadow: 0 0 15px rgba(0, 168, 255, 0.5); /* 藍色發光 */
+}
 </style>

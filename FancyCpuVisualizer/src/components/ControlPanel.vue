@@ -47,7 +47,6 @@ function toggle(id) {
   padding: 10px 15px;
   background: #1e1e1e;
   border-top: 1px solid #333;
-  /* 📐 縮減高度：原本很高，現在改為固定小高度或自動 */
   height: 140px; 
   display: flex;
   flex-direction: column;
@@ -78,22 +77,20 @@ function toggle(id) {
   border-radius: 4px;
 }
 
-/* 📦 改用 Grid 佈局，自動填滿橫向空間 */
 .input-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   overflow-y: auto;
-  align-content: flex-start; /* 內容少了就往上靠 */
+  align-content: flex-start;
 }
 
-/* 🎛️ 緊湊的小卡片設計 */
 .input-card {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  width: 50px; /* 固定寬度，很省空間 */
+  width: 50px;
   height: 50px;
   background: #2a2a2a;
   border: 1px solid #3a3a3a;
@@ -109,9 +106,8 @@ function toggle(id) {
   border-color: #555;
 }
 
-/* 啟動狀態：卡片變亮，邊框變色 */
 .input-card.active {
-  background: #2e3b2e; /* 深綠底 */
+  background: #2e3b2e;
   border-color: #4caf50;
   box-shadow: 0 0 8px rgba(76, 175, 80, 0.2);
 }
@@ -120,14 +116,13 @@ function toggle(id) {
   font-size: 12px;
   color: #ccc;
   font-weight: bold;
-  font-family: 'Consolas', monospace; /* 標籤維持等寬字體比較好看 */
+  font-family: 'Consolas', monospace;
 }
 
 .input-card.active .label {
   color: #4caf50;
 }
 
-/* 💡 底部的小燈條 */
 .toggle-indicator {
   width: 20px;
   height: 4px;
@@ -137,11 +132,10 @@ function toggle(id) {
 }
 
 .input-card.active .toggle-indicator {
-  background: #4caf50; /* 亮綠燈 */
+  background: #4caf50;
   box-shadow: 0 0 5px #4caf50;
 }
 
-/* 捲軸美化 */
 .input-grid::-webkit-scrollbar { width: 6px; }
 .input-grid::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
 .input-grid::-webkit-scrollbar-track { background: transparent; }
