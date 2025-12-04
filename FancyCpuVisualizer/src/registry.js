@@ -85,6 +85,105 @@ export const ChipRegistry = {
     }
   },
 
+    // 💻 4-Bit Program Counter (PC)
+  // 邏輯：if(reset) 0; else if(load) in; else if(inc) out+1; else out;
+  'PC_4_BIT': {
+    inputs: ['In0', 'In1', 'In2', 'In3', 'inc', 'load', 'reset'],
+    outputs: ['Out0', 'Out1', 'Out2', 'Out3'],
+    components: [
+      // 1. 核心記憶體 (Register)
+      { id: 'reg', type: 'REGISTER_4_BIT', x: 350, y: 150, value: 0 },
+      
+      // 2. 加法器 (用來計算 +1)
+      { id: 'adder', type: 'ADDER_4_BIT', x: 550, y: 50, value: 0 },
+
+      // 3. 用來產生 "1" 的訊號 (Hack: 未連接輸入的 NOT = 1)
+      { id: 'const1', type: 'NOT', x: 500, y: 20, value: 0 },
+
+      // 4. 三層 MUX (處理優先級)
+      // MuxInc: 選擇 (維持原值) vs (加一值)
+      { id: 'mux_inc', type: 'MUX_4_BIT', x: 750, y: 100, value: 0 },
+      // MuxLoad: 選擇 (上面結果) vs (外部輸入值)
+      { id: 'mux_load', type: 'MUX_4_BIT', x: 900, y: 200, value: 0 },
+      // MuxReset: 選擇 (上面結果) vs (0)
+      { id: 'mux_reset', type: 'MUX_4_BIT', x: 1050, y: 300, value: 0 }
+    ],
+    wires: [
+      // === 0. 產生常數 1 (給 Adder 和 Register Load 使用) ===
+      // const1 沒有輸入 -> 視為 0 -> NOT 後輸出 1
+      // PC 的 Register 每個 Tick 都要更新，所以 Load 永遠設為 1
+      { from: 'const1', to: 'reg', toPin: 'Load' },
+      // Adder 的 B 輸入設為 0001 (只接 B0)
+      { from: 'const1', to: 'adder', toPin: 'B0' },
+
+      // === 1. 迴圈起點：從 Register 讀出當前值 ===
+      // 送給 Adder 的 A (準備 +1)
+      { from: 'reg', fromPin: 'Out0', to: 'adder', toPin: 'A0' },
+      { from: 'reg', fromPin: 'Out1', to: 'adder', toPin: 'A1' },
+      { from: 'reg', fromPin: 'Out2', to: 'adder', toPin: 'A2' },
+      { from: 'reg', fromPin: 'Out3', to: 'adder', toPin: 'A3' },
+      // 也要送給 MuxInc 的 A (如果不 Inc，就維持原值)
+      { from: 'reg', fromPin: 'Out0', to: 'mux_inc', toPin: 'A0' },
+      { from: 'reg', fromPin: 'Out1', to: 'mux_inc', toPin: 'A1' },
+      { from: 'reg', fromPin: 'Out2', to: 'mux_inc', toPin: 'A2' },
+      { from: 'reg', fromPin: 'Out3', to: 'mux_inc', toPin: 'A3' },
+
+      // === 2. MuxInc (處理 inc 訊號) ===
+      { from: 'inc', to: 'mux_inc', toPin: 'Sel' },
+      // B 輸入來自 Adder 的結果 (S0..S3)
+      { from: 'adder', fromPin: 'S0', to: 'mux_inc', toPin: 'B0' },
+      { from: 'adder', fromPin: 'S1', to: 'mux_inc', toPin: 'B1' },
+      { from: 'adder', fromPin: 'S2', to: 'mux_inc', toPin: 'B2' },
+      { from: 'adder', fromPin: 'S3', to: 'mux_inc', toPin: 'B3' },
+
+      // === 3. MuxLoad (處理 load 訊號) ===
+      { from: 'load', to: 'mux_load', toPin: 'Sel' },
+      // A 輸入來自上面的 mux_inc
+      { from: 'mux_inc', fromPin: 'Out0', to: 'mux_load', toPin: 'A0' },
+      { from: 'mux_inc', fromPin: 'Out1', to: 'mux_load', toPin: 'A1' },
+      { from: 'mux_inc', fromPin: 'Out2', to: 'mux_load', toPin: 'A2' },
+      { from: 'mux_inc', fromPin: 'Out3', to: 'mux_load', toPin: 'A3' },
+      // B 輸入來自外部 In (跳轉目標)
+      { from: 'In0', to: 'mux_load', toPin: 'B0' },
+      { from: 'In1', to: 'mux_load', toPin: 'B1' },
+      { from: 'In2', to: 'mux_load', toPin: 'B2' },
+      { from: 'In3', to: 'mux_load', toPin: 'B3' },
+
+      // === 4. MuxReset (處理 reset 訊號) ===
+      { from: 'reset', to: 'mux_reset', toPin: 'Sel' },
+      // A 輸入來自上面的 mux_load
+      { from: 'mux_load', fromPin: 'Out0', to: 'mux_reset', toPin: 'A0' },
+      { from: 'mux_load', fromPin: 'Out1', to: 'mux_reset', toPin: 'A1' },
+      { from: 'mux_load', fromPin: 'Out2', to: 'mux_reset', toPin: 'A2' },
+      { from: 'mux_load', fromPin: 'Out3', to: 'mux_reset', toPin: 'A3' },
+      // B 輸入懸空 (=0, 重置)
+
+      // === 5. 迴圈終點：寫回 Register ===
+      { from: 'mux_reset', fromPin: 'Out0', to: 'reg', toPin: 'In0' },
+      { from: 'mux_reset', fromPin: 'Out1', to: 'reg', toPin: 'In1' },
+      { from: 'mux_reset', fromPin: 'Out2', to: 'reg', toPin: 'In2' },
+      { from: 'mux_reset', fromPin: 'Out3', to: 'reg', toPin: 'In3' }
+    ],
+    ioMapping: {
+      inputs: {
+        'inc':   [{id:'mux_inc', pin:'Sel'}],
+        'load':  [{id:'mux_load', pin:'Sel'}],
+        'reset': [{id:'mux_reset', pin:'Sel'}],
+        'In0':   [{id:'mux_load', pin:'B0'}],
+        'In1':   [{id:'mux_load', pin:'B1'}],
+        'In2':   [{id:'mux_load', pin:'B2'}],
+        'In3':   [{id:'mux_load', pin:'B3'}]
+      },
+      outputs: {
+        'Out0': {id:'reg', pin:'Out0'},
+        'Out1': {id:'reg', pin:'Out1'},
+        'Out2': {id:'reg', pin:'Out2'},
+        'Out3': {id:'reg', pin:'Out3'}
+      },
+      output: 'reg'
+    }
+  },
+
   'XOR': {
     inputs: ['A', 'B'],
     outputs: ['OUT'],
