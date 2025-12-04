@@ -5,6 +5,86 @@ export const ChipRegistry = {
   'NAND':{ inputs: ['A', 'B'], outputs: ['OUT'] },
   'NOT': { inputs: ['In'], outputs: ['OUT'] },
 
+  // 🕒 時序元件：DFF
+  'DFF': {
+    inputs: ['In'],
+    outputs: ['OUT'],
+    // DFF 是基礎元件，沒有 components 結構
+  },
+
+  // 📦 1-Bit Register (暫存器)
+  'BIT': {
+    inputs: ['In', 'Load'],
+    outputs: ['Out'],
+    components: [
+      { id: 'm1', type: 'MUX', x: 50, y: 50, value: 0 },
+      { id: 'dff', type: 'DFF', x: 200, y: 75, value: 0 }
+    ],
+    wires: [
+      // 1. Load 決定 MUX 選誰
+      { from: 'Load', to: 'm1', toPin: 'Sel' },
+      
+      // 2. 如果 Load=1，選新的輸入 In (寫入)
+      { from: 'In', to: 'm1', toPin: 'B' },
+      
+      // 3. 如果 Load=0，選 DFF 的舊輸出 (保持) -> 這就是迴圈！
+      { from: 'dff', to: 'm1', toPin: 'A' },
+
+      // 4. MUX 的結果送進 DFF (等待下個 Tick 更新)
+      { from: 'm1', to: 'dff', toPin: 'In' }
+    ],
+    ioMapping: {
+      inputs: {
+        'In':   [{ id: 'm1', pin: 'B' }],
+        'Load': [{ id: 'm1', pin: 'Sel' }]
+      },
+      outputs: { 'Out': 'dff' }, // BIT 的輸出就是 DFF 當下的值
+      output: 'dff'
+    }
+  },
+
+  'REGISTER_4_BIT': {
+    inputs: ['In0', 'In1', 'In2', 'In3', 'Load'],
+    outputs: ['Out0', 'Out1', 'Out2', 'Out3'],
+    components: [
+      { id: 'b0', type: 'BIT', x: 50, y: 50, value: 0 },
+      { id: 'b1', type: 'BIT', x: 50, y: 150, value: 0 },
+      { id: 'b2', type: 'BIT', x: 50, y: 250, value: 0 },
+      { id: 'b3', type: 'BIT', x: 50, y: 350, value: 0 }
+    ],
+    wires: [
+      // === 共用 Load 訊號 ===
+      { from: 'Load', to: 'b0', toPin: 'Load' },
+      { from: 'Load', to: 'b1', toPin: 'Load' },
+      { from: 'Load', to: 'b2', toPin: 'Load' },
+      { from: 'Load', to: 'b3', toPin: 'Load' },
+      
+      // === 獨立資料輸入 ===
+      { from: 'In0', to: 'b0', toPin: 'In' },
+      { from: 'In1', to: 'b1', toPin: 'In' },
+      { from: 'In2', to: 'b2', toPin: 'In' },
+      { from: 'In3', to: 'b3', toPin: 'In' }
+    ],
+    ioMapping: {
+      inputs: {
+        'Load': [
+          {id:'b0',pin:'Load'}, {id:'b1',pin:'Load'}, 
+          {id:'b2',pin:'Load'}, {id:'b3',pin:'Load'}
+        ],
+        'In0': [{id:'b0',pin:'In'}], 
+        'In1': [{id:'b1',pin:'In'}],
+        'In2': [{id:'b2',pin:'In'}], 
+        'In3': [{id:'b3',pin:'In'}]
+      },
+      outputs: {
+        'Out0': 'b0', 
+        'Out1': 'b1', 
+        'Out2': 'b2', 
+        'Out3': 'b3'
+      }
+    }
+  },
+
   'XOR': {
     inputs: ['A', 'B'],
     outputs: ['OUT'],

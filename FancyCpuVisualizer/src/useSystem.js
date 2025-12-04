@@ -6,7 +6,8 @@ const MAX_ITERATIONS = 100;
 
 export const systemState = reactive({
   components: [],
-  wires: []
+  wires: [],
+  clock: 0 // 🕒 新增：全域時鐘
 });
 
 /**
@@ -15,10 +16,11 @@ export const systemState = reactive({
 export function assembleCode(code) {
   systemState.components = [];
   systemState.wires = []; 
+  systemState.clock = 0;
   
   const lines = code.split('\n').map(l => l.trim()).filter(l => l);
 
-  // 第一遍掃描：建立元件
+  // 第一遍：建立元件
   lines.forEach(line => {
     const parts = line.split(/\s+/);
     if (parts.length < 2) return;
@@ -33,6 +35,7 @@ export function assembleCode(code) {
         x: parseInt(x),
         y: parseInt(y),
         value: 0,
+        nextValue: 0, // 🕒 DFF 專用：暫存下一個狀態
         expanded: false,
         inputStates: {},
         outputStates: {},
@@ -46,7 +49,7 @@ export function assembleCode(code) {
     }
   });
 
-  // 第二遍掃描：處理連線
+  // 第二遍：處理連線
   lines.forEach(line => {
     const parts = line.split(/\s+/);
     if (parts.length < 2) return;
@@ -86,6 +89,7 @@ function buildInternals(type) {
     components: blueprint.components.map(c => ({
       ...c,
       value: 0,
+      nextValue: 0, // 🕒 子元件也要有 nextValue
       inputStates: {},
       outputStates: {},
       internals: ChipRegistry[c.type] ? buildInternals(c.type) : null
@@ -96,7 +100,35 @@ function buildInternals(type) {
 }
 
 /**
- * 2. 核心模擬引擎 (迭代直到穩定)
+ * 🕒 核心功能：時鐘跳動 (Tick)
+ * 只有在 Tick 時，DFF 才會把 nextValue 寫入 value
+ */
+export function tickSystem() {
+  systemState.clock++;
+  
+  // 1. 更新所有 DFF 的數值
+  updateDFFs(systemState.components);
+  
+  // 2. DFF 更新後，電路狀態改變，需要重新計算直到穩定
+  evaluateSystem();
+}
+
+// 遞迴更新 DFF
+function updateDFFs(components) {
+  components.forEach(comp => {
+    if (comp.type === 'DFF') {
+      comp.value = comp.nextValue; // ⚡️ 更新發生在這裡
+      comp.outputStates = { OUT: comp.value };
+    }
+    
+    if (comp.internals && comp.internals.components) {
+      updateDFFs(comp.internals.components);
+    }
+  });
+}
+
+/**
+ * 2. 模擬引擎
  */
 export function evaluateSystem() {
   let stabilized = false;
@@ -108,20 +140,13 @@ export function evaluateSystem() {
     const hasChanged = simulateScope(systemState.components, systemState.wires, {}, {});
     if (hasChanged) stabilized = false;
   }
-
-  if (iterations >= MAX_ITERATIONS) {
-    console.warn('⚠️ Circuit oscillation detected or max depth reached.');
-  }
 }
 
-/**
- * 模擬 Scope
- */
 function simulateScope(components, wires, parentInputs = {}, scopeInputs = {}) {
   let scopeChanged = false;
 
   components.forEach(comp => {
-    // A. 收集輸入訊號
+    // A. 收集輸入
     const oldInputs = JSON.stringify(comp.inputStates);
     const newInputs = getInputs(comp, wires, components, parentInputs, scopeInputs);
     
@@ -134,20 +159,30 @@ function simulateScope(components, wires, parentInputs = {}, scopeInputs = {}) {
     const oldVal = comp.value;
     const oldOutputStates = JSON.stringify(comp.outputStates);
 
-    if (comp.internals && ChipRegistry[comp.type]) {
+    // 🕒 DFF 特殊邏輯
+    if (comp.type === 'DFF') {
+      // DFF 讀取輸入，但只存到 nextValue
+      // 它的 value (輸出) 在 Tick 之前絕對不會變！
+      const inputVal = newInputs['In'] !== undefined ? Number(newInputs['In']) : 0;
+      if (comp.nextValue !== inputVal) {
+        comp.nextValue = inputVal;
+        // 注意：nextValue 變了不算 scopeChanged，因為輸出沒變，不會影響下游
+      }
+      comp.outputStates = { OUT: comp.value };
+    }
+    else if (comp.internals && ChipRegistry[comp.type]) {
       // === 複合晶片 ===
       const mapping = ChipRegistry[comp.type].ioMapping;
       
       const internalChanged = simulateScope(
         comp.internals.components, 
         comp.internals.wires, 
-        newInputs, // 直接傳遞 newInputs 作為 parentInputs
+        newInputs, 
         newInputs
       );
 
       if (internalChanged) scopeChanged = true;
 
-      // 映射輸出
       if (mapping.outputs) {
         Object.keys(mapping.outputs).forEach(portName => {
           const target = mapping.outputs[portName];
@@ -160,7 +195,6 @@ function simulateScope(components, wires, parentInputs = {}, scopeInputs = {}) {
           }
 
           const internalComp = comp.internals.components.find(c => c.id === internalId);
-          
           if (internalComp) {
             if (internalPin && internalComp.outputStates && internalComp.outputStates[internalPin] !== undefined) {
               comp.outputStates[portName] = internalComp.outputStates[internalPin];
@@ -195,11 +229,11 @@ function simulateScope(components, wires, parentInputs = {}, scopeInputs = {}) {
 
 function calculateLogic(type, inputsMap, currentValue) {
   if (type === 'INPUT') return currentValue;
+  if (type === 'DFF') return currentValue; // DFF 不在這裡計算
 
   const registryDef = ChipRegistry[type];
   const inputOrder = registryDef ? registryDef.inputs : ['A', 'B']; 
   
-  // 🛡️ 強制轉型為 Number (這是解決 MUX 鬼影的關鍵)
   const valArr = inputOrder.map(pin => {
     const val = inputsMap[pin];
     return (val !== undefined) ? Number(val) : 0;
@@ -221,6 +255,11 @@ function calculateLogic(type, inputsMap, currentValue) {
 function getInputs(targetComp, wires, components, parentInputs, scopeInputs) {
   const inputMap = {};
   const definedInputs = ChipRegistry[targetComp.type]?.inputs || ['A', 'B'];
+  
+  // DFF 只有一個輸入 'In'
+  if (targetComp.type === 'DFF' && !ChipRegistry['DFF']) {
+     // 隱式定義
+  }
 
   const setVal = (pin, val) => { inputMap[pin] = val; };
 

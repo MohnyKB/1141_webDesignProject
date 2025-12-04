@@ -2,9 +2,16 @@
   <div class="control-panel">
     <div class="panel-header">
       <h3>Signal Generator</h3>
-      <span class="input-count" v-if="inputComponents.length > 0">
-        {{ inputComponents.length }} Inputs
-      </span>
+      
+      <div class="header-right">
+        <button class="clock-btn" @click="handleTick">
+          Tick (Clock: {{ systemState.clock }})
+        </button>
+
+        <span class="input-count" v-if="inputComponents.length > 0">
+          {{ inputComponents.length }} Inputs
+        </span>
+      </div>
     </div>
 
     <div class="input-grid">
@@ -28,9 +35,9 @@
 
 <script setup>
 import { computed } from 'vue';
-import { systemState, toggleInput } from '../useSystem';
+// 記得引入 systemState 和 tickSystem
+import { systemState, toggleInput, tickSystem } from '../useSystem';
 
-// 自動過濾出所有的 INPUT 元件，並進行簡單排序 (讓 A0, A1... 排在一起)
 const inputComponents = computed(() => {
   return systemState.components
     .filter(c => c.type === 'INPUT')
@@ -39,6 +46,11 @@ const inputComponents = computed(() => {
 
 function toggle(id) {
   toggleInput(id);
+}
+
+// 🕒 觸發時鐘
+function handleTick() {
+  tickSystem();
 }
 </script>
 
@@ -52,6 +64,29 @@ function toggle(id) {
   flex-direction: column;
   box-shadow: 0 -2px 10px rgba(0,0,0,0.2);
 }
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 🕒 時鐘按鈕樣式 */
+.clock-btn {
+  background: #ff9800;
+  color: #fff;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: bold;
+  font-family: monospace;
+  transition: background 0.2s;
+}
+
+.clock-btn:hover { background: #f57c00; }
+.clock-btn:active { transform: translateY(1px); }
 
 .panel-header {
   display: flex;
