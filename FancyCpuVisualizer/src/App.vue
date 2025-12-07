@@ -66,33 +66,80 @@ const PIN_HEIGHT = 30;
 const HEADER_HEIGHT = 40;
 const PIN_OFFSET_Y = 15;
 // --- HDL 相關 (維持不變) ---
+// const hdlCode = ref(`
+// INPUT reset 50 50
+
+// INPUT Op 200 50
+// INPUT a  250 50
+
+// INPUT c1 300 50
+// INPUT c2 350 50
+// INPUT c3 400 50
+// INPUT c4 450 50
+// INPUT c5 500 50
+// INPUT c6 550 50
+
+// INPUT d1 600 50
+// INPUT d2 650 50
+// INPUT d3 700 50
+
+// INPUT j1 750 50
+// INPUT j2 800 50
+// INPUT j3 850 50
+
+// INPUT Instr0 50 150
+// INPUT Instr1 100 150
+// INPUT Instr2 150 150
+// INPUT Instr3 200 150
+
+// COMPUTER_4_BIT HackPC 450 300
+
+// WIRE Op HackPC Op
+// WIRE reset HackPC reset
+// WIRE a HackPC a
+// WIRE c1 HackPC c1
+// WIRE c2 HackPC c2
+// WIRE c3 HackPC c3
+// WIRE c4 HackPC c4
+// WIRE c5 HackPC c5
+// WIRE c6 HackPC c6
+// WIRE d1 HackPC d1
+// WIRE d2 HackPC d2
+// WIRE d3 HackPC d3
+// WIRE j1 HackPC j1
+// WIRE j2 HackPC j2
+// WIRE j3 HackPC j3
+// WIRE Instr0 HackPC Instr0
+// WIRE Instr1 HackPC Instr1
+// WIRE Instr2 HackPC Instr2
+// WIRE Instr3 HackPC Instr3
+// `);
 const hdlCode = ref(`
-INPUT reset 50 50
+INPUT reset
+INPUT Op
+INPUT a
 
-INPUT Op 200 50
-INPUT a  250 50
+INPUT c1
+INPUT c2
+INPUT c3
+INPUT c4
+INPUT c5
+INPUT c6
 
-INPUT c1 300 50
-INPUT c2 350 50
-INPUT c3 400 50
-INPUT c4 450 50
-INPUT c5 500 50
-INPUT c6 550 50
+INPUT d1
+INPUT d2
+INPUT d3
 
-INPUT d1 600 50
-INPUT d2 650 50
-INPUT d3 700 50
+INPUT j1
+INPUT j2
+INPUT j3
 
-INPUT j1 750 50
-INPUT j2 800 50
-INPUT j3 850 50
+INPUT Instr0
+INPUT Instr1
+INPUT Instr2
+INPUT Instr3
 
-INPUT Instr0 50 150
-INPUT Instr1 100 150
-INPUT Instr2 150 150
-INPUT Instr3 200 150
-
-COMPUTER_4_BIT HackPC 450 300
+COMPUTER_4_BIT HackPC
 
 WIRE Op HackPC Op
 WIRE reset HackPC reset
