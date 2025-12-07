@@ -1,4 +1,3 @@
-// src/useSystem.js
 import { reactive } from 'vue';
 import { ChipRegistry } from './registry';
 
@@ -7,7 +6,7 @@ const MAX_ITERATIONS = 100;
 export const systemState = reactive({
   components: [],
   wires: [],
-  clock: 0 // 🕒 新增：全域時鐘
+  clock: 0 
 });
 
 /**
@@ -20,6 +19,9 @@ export function assembleCode(code) {
   
   const lines = code.split('\n').map(l => l.trim()).filter(l => l);
 
+  const parsedComponents = [];
+  const tempWires = [];
+
   // 第一遍：建立元件
   lines.forEach(line => {
     const parts = line.split(/\s+/);
@@ -27,15 +29,19 @@ export function assembleCode(code) {
     const type = parts[0].toUpperCase();
     if (type === 'WIRE') return;
 
-    if (parts.length >= 4) {
-      const [_, id, x, y] = parts;
+    if (parts.length >= 2) {
+      const id = parts[1];
+      
+      const x = parts.length >= 4 ? parseInt(parts[2]) : undefined;
+      const y = parts.length >= 4 ? parseInt(parts[3]) : undefined;
+
       const comp = {
         id: id,
         type: type,
-        x: parseInt(x),
-        y: parseInt(y),
+        x: x, 
+        y: y,
         value: 0,
-        nextValue: 0, // 🕒 DFF 專用：暫存下一個狀態
+        nextValue: 0,
         expanded: false,
         inputStates: {},
         outputStates: {},
@@ -45,7 +51,7 @@ export function assembleCode(code) {
       if (ChipRegistry[type]) {
         comp.internals = buildInternals(type);
       }
-      systemState.components.push(comp);
+      parsedComponents.push(comp);
     }
   });
 
@@ -67,18 +73,121 @@ export function assembleCode(code) {
       if (arg2) {
         fromPin = arg1; toPin = arg2;
       } else if (arg1) {
-        const targetComp = systemState.components.find(c => c.id === targetId);
+        const targetComp = parsedComponents.find(c => c.id === targetId);
         const targetDef = targetComp ? ChipRegistry[targetComp.type] : null;
         const isTargetInput = targetDef && targetDef.inputs && targetDef.inputs.includes(arg1);
         if (isTargetInput) toPin = arg1;
         else fromPin = arg1;
       }
 
-      systemState.wires.push({ from: sourceId, to: targetId, fromPin, toPin });
+      tempWires.push({ from: sourceId, to: targetId, fromPin, toPin });
+    }
+  });
+  
+  // 🟢 邏輯修正：根據連線目標的 Pin 順序對 INPUT 元件排序
+  const inputComps = parsedComponents.filter(c => c.type === 'INPUT');
+  const nonInputComps = parsedComponents.filter(c => c.type !== 'INPUT');
+  
+  let mainTargetComp = null;
+  
+  // 啟發式：尋找第一個非 INPUT 元件，且有 INPUT 元件連線到它 (即主要目標)
+  for (const targetComp of nonInputComps) {
+    const hasInputWire = tempWires.some(w => w.to === targetComp.id && inputComps.some(i => i.id === w.from));
+    if (hasInputWire) {
+      mainTargetComp = targetComp;
+      break;
+    }
+  }
+
+  let sortedInputComps = inputComps;
+
+  if (mainTargetComp) {
+    const mainTargetDef = ChipRegistry[mainTargetComp.type];
+    // 取得目標元件定義的輸入腳位順序 (例如: ['Instr0', 'Instr1', 'Op', 'reset'])
+    const targetInputPins = mainTargetDef?.inputs || []; 
+
+    // 1. 建立 Input ID -> Target Pin Name 的對應表
+    const inputToPinMap = {};
+    tempWires.filter(w => w.to === mainTargetComp.id && w.toPin).forEach(w => {
+      if (inputComps.some(i => i.id === w.from)) {
+        inputToPinMap[w.from] = w.toPin;
+      }
+    });
+
+    // 2. 依照目標元件的輸入腳位順序，建立新的 INPUT 元件列表
+    const newOrder = [];
+    targetInputPins.forEach(pinName => {
+      // 找到哪個 INPUT 元件連到了這個 pinName
+      const inputId = Object.keys(inputToPinMap).find(id => inputToPinMap[id] === pinName);
+
+      if (inputId) {
+        const inputComp = inputComps.find(c => c.id === inputId);
+        if (inputComp) newOrder.push(inputComp);
+      }
+    });
+    
+    // 3. 將未連線到主要目標元件的 INPUT 元件排在最後
+    const connectedIds = newOrder.map(c => c.id);
+    const unconnectedInputs = inputComps.filter(c => !connectedIds.includes(c.id));
+    
+    sortedInputComps = [...newOrder, ...unconnectedInputs];
+  }
+
+  // 4. Final assignment to systemState
+  systemState.components = parsedComponents;
+  systemState.wires = tempWires;
+  
+  // 🟢 執行自動排版，並將排序好的 INPUT 列表傳入
+  applyAutoLayout(systemState.components, sortedInputComps);
+
+  evaluateSystem();
+}
+
+/**
+ * 🟢 自動排版算法 (更新)
+ * 接收一個 sortedInputComps 參數，並根據這個列表來排版 INPUT 元件
+ */
+function applyAutoLayout(components, sortedInputComps) {
+  // 版面設定常數
+  const INPUT_X = 50;
+  const INPUT_START_Y = 50;
+  const INPUT_GAP_Y = 100; 
+
+  const GRID_START_X = 250;
+  const GRID_START_Y = 50;
+  const CELL_W = 400; 
+  const CELL_H = 300; 
+  const COLS = 3;     
+
+  // 1. Handle INPUT components based on the sorted list
+  let inputCount = 0;
+  
+  // 🟢 根據傳入的 sortedInputComps 列表來排版 INPUT 元件
+  sortedInputComps.forEach(comp => {
+    // 只有在座標缺失時才自動排版
+    if ((comp.x === undefined || isNaN(comp.x) || comp.y === undefined || isNaN(comp.y)) && comp.type === 'INPUT') {
+        comp.x = INPUT_X;
+        comp.y = INPUT_START_Y + (inputCount * INPUT_GAP_Y);
+        inputCount++;
     }
   });
 
-  evaluateSystem();
+  // 2. Handle non-INPUT components (Grid layout)
+  let mainCount = 0;
+  components.forEach(comp => {
+    if (comp.type === 'INPUT') return; 
+
+    // 只有在座標缺失時才自動排版
+    if (comp.x === undefined || isNaN(comp.x) || comp.y === undefined || isNaN(comp.y)) {
+      
+      const col = mainCount % COLS;
+      const row = Math.floor(mainCount / COLS);
+      
+      comp.x = GRID_START_X + (col * CELL_W);
+      comp.y = GRID_START_Y + (row * CELL_H);
+      mainCount++;
+    }
+  });
 }
 
 function buildInternals(type) {
@@ -89,7 +198,7 @@ function buildInternals(type) {
     components: blueprint.components.map(c => ({
       ...c,
       value: 0,
-      nextValue: 0, // 🕒 子元件也要有 nextValue
+      nextValue: 0,
       inputStates: {},
       outputStates: {},
       internals: ChipRegistry[c.type] ? buildInternals(c.type) : null
@@ -99,37 +208,24 @@ function buildInternals(type) {
   return internals;
 }
 
-/**
- * 🕒 核心功能：時鐘跳動 (Tick)
- * 只有在 Tick 時，DFF 才會把 nextValue 寫入 value
- */
 export function tickSystem() {
   systemState.clock++;
-  
-  // 1. 更新所有 DFF 的數值
   updateDFFs(systemState.components);
-  
-  // 2. DFF 更新後，電路狀態改變，需要重新計算直到穩定
   evaluateSystem();
 }
 
-// 遞迴更新 DFF
 function updateDFFs(components) {
   components.forEach(comp => {
     if (comp.type === 'DFF') {
-      comp.value = comp.nextValue; // ⚡️ 更新發生在這裡
+      comp.value = comp.nextValue;
       comp.outputStates = { OUT: comp.value };
     }
-    
     if (comp.internals && comp.internals.components) {
       updateDFFs(comp.internals.components);
     }
   });
 }
 
-/**
- * 2. 模擬引擎
- */
 export function evaluateSystem() {
   let stabilized = false;
   let iterations = 0;
@@ -146,7 +242,6 @@ function simulateScope(components, wires, parentInputs = {}, scopeInputs = {}) {
   let scopeChanged = false;
 
   components.forEach(comp => {
-    // A. 收集輸入
     const oldInputs = JSON.stringify(comp.inputStates);
     const newInputs = getInputs(comp, wires, components, parentInputs, scopeInputs);
     
@@ -155,23 +250,17 @@ function simulateScope(components, wires, parentInputs = {}, scopeInputs = {}) {
       scopeChanged = true;
     }
 
-    // B. 計算邏輯
     const oldVal = comp.value;
     const oldOutputStates = JSON.stringify(comp.outputStates);
 
-    // 🕒 DFF 特殊邏輯
     if (comp.type === 'DFF') {
-      // DFF 讀取輸入，但只存到 nextValue
-      // 它的 value (輸出) 在 Tick 之前絕對不會變！
       const inputVal = newInputs['In'] !== undefined ? Number(newInputs['In']) : 0;
       if (comp.nextValue !== inputVal) {
         comp.nextValue = inputVal;
-        // 注意：nextValue 變了不算 scopeChanged，因為輸出沒變，不會影響下游
       }
       comp.outputStates = { OUT: comp.value };
     }
     else if (comp.internals && ChipRegistry[comp.type]) {
-      // === 複合晶片 ===
       const mapping = ChipRegistry[comp.type].ioMapping;
       
       const internalChanged = simulateScope(
@@ -214,7 +303,6 @@ function simulateScope(components, wires, parentInputs = {}, scopeInputs = {}) {
       }
 
     } else {
-      // === 基本邏輯閘 ===
       comp.value = calculateLogic(comp.type, newInputs, comp.value);
       comp.outputStates = { OUT: comp.value }; 
     }
@@ -229,7 +317,7 @@ function simulateScope(components, wires, parentInputs = {}, scopeInputs = {}) {
 
 function calculateLogic(type, inputsMap, currentValue) {
   if (type === 'INPUT') return currentValue;
-  if (type === 'DFF') return currentValue; // DFF 不在這裡計算
+  if (type === 'DFF') return currentValue;
 
   const registryDef = ChipRegistry[type];
   const inputOrder = registryDef ? registryDef.inputs : ['A', 'B']; 
@@ -256,11 +344,6 @@ function getInputs(targetComp, wires, components, parentInputs, scopeInputs) {
   const inputMap = {};
   const definedInputs = ChipRegistry[targetComp.type]?.inputs || ['A', 'B'];
   
-  // DFF 只有一個輸入 'In'
-  if (targetComp.type === 'DFF' && !ChipRegistry['DFF']) {
-     // 隱式定義
-  }
-
   const setVal = (pin, val) => { inputMap[pin] = val; };
 
   wires.filter(w => w.to === targetComp.id).forEach(w => {
