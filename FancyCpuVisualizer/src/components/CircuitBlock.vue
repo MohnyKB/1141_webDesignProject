@@ -38,9 +38,35 @@
 
       <div class="internal-canvas" @mousedown="handleCanvasMouseDown">
         <svg class="internal-wires-layer">
-          <path v-for="(wire, i) in allInternalWires" :key="i" :d="wire.path" 
-                class="wire-path" :class="{ 'active': wire.active }"
-                stroke-width="2" fill="transparent"/>
+          <g v-for="(wire, i) in allInternalWires" :key="i">
+            <path 
+              :d="wire.path" 
+              class="wire-path" 
+              :class="{ 'active': wire.active }"
+              stroke-width="2" 
+              fill="transparent"
+            />
+            
+            <path 
+              :d="wire.path" 
+              class="wire-hit-area"
+              stroke="transparent" 
+              stroke-width="10" 
+              fill="none" 
+              @dblclick.stop="addInternalWaypoint($event, wire.sourceWire)"
+            />
+
+            <circle 
+              v-for="(wp, idx) in wire.waypoints" 
+              :key="idx"
+              :cx="wp.x" 
+              :cy="wp.y" 
+              r="5" 
+              class="waypoint-handle"
+              @mousedown.stop="startDragInternalWaypoint($event, wire.sourceWire, idx)"
+              @dblclick.stop="removeInternalWaypoint(wire.sourceWire, idx)"
+            />
+          </g>
         </svg>
 
         <div class="input-ports-column">
@@ -74,12 +100,8 @@
 </template>
 
 <script>
-// 🟢 全域 Z-Index 計數器
 let globalTopZIndex = 100;
-
-export default {
-  name: 'CircuitBlock'
-}
+export default { name: 'CircuitBlock' }
 </script>
 
 <script setup>
@@ -106,33 +128,26 @@ const internalSelectedIds = ref(new Set());
 const isInternalBoxSelecting = ref(false);
 const internalSelectionStart = reactive({ x: 0, y: 0 });
 const internalSelectionBox = ref(null);
-
-// 🟢 本地 Z-Index 狀態
 const currentZIndex = ref(globalTopZIndex);
 
-// 🟢 置頂函式
 function bringToFront() {
   globalTopZIndex++;
   currentZIndex.value = globalTopZIndex;
 }
 
-// 🟢 新增：展開並置頂
 function handleExpand() {
-  bringToFront(); // 先把層級拉到最高
-  props.comp.expanded = true; // 再展開
+  bringToFront();
+  props.comp.expanded = true;
 }
 
-// 🟢 統一的拖曳處理
 function handleStartDrag(event) {
   bringToFront(); 
   emit('startDrag', event, props.comp);
 }
 
-// === 元件大小計算 ===
 function getCompSize(c) {
   if (!c.expanded) return { w: 100, h: 80 };
   let maxW = 300; let maxH = 100;
-  
   if (c.internals && c.internals.components) {
     c.internals.components.forEach(sub => {
       const subSize = getCompSize(sub);
@@ -156,8 +171,9 @@ const dynamicStyle = computed(() => {
   return { width: size.w + 'px', height: size.h + 'px' };
 });
 
-// === 內部拖曳邏輯 ===
+// === 🟢 內部互動邏輯 (元件拖曳 + 貝茲曲線拖曳) ===
 let draggingSubComp = null;
+let draggingInternalWaypoint = null; // 🟢 貝茲曲線控制點狀態
 let lastInternalMouseX = 0;
 let lastInternalMouseY = 0;
 
@@ -165,11 +181,8 @@ function handleInternalDrag(event, subComp) {
   event.stopPropagation(); 
   bringToFront();
 
-  // 處理選取狀態
   if (event.ctrlKey) {
-    if (!internalSelectedIds.value.has(subComp.id)) {
-        internalSelectedIds.value.add(subComp.id);
-    }
+    if (!internalSelectedIds.value.has(subComp.id)) internalSelectedIds.value.add(subComp.id);
   } else {
     if (!internalSelectedIds.value.has(subComp.id)) {
         internalSelectedIds.value.clear();
@@ -185,20 +198,67 @@ function handleInternalDrag(event, subComp) {
   window.addEventListener('mouseup', onInternalMouseUp);
 }
 
+// 🟢 新增：開始拖曳內部控制點
+function startDragInternalWaypoint(event, wire, index) {
+  event.stopPropagation();
+  bringToFront();
+  
+  draggingInternalWaypoint = { wire, index };
+  lastInternalMouseX = event.clientX;
+  lastInternalMouseY = event.clientY;
+  
+  window.addEventListener('mousemove', onInternalMouseMove);
+  window.addEventListener('mouseup', onInternalMouseUp);
+}
+
+// 🟢 新增：雙擊連線新增控制點
+function addInternalWaypoint(event, wire) {
+  if (!wire.waypoints) wire.waypoints = [];
+  
+  // 計算相對於 .internal-canvas 的座標
+  const el = event.target.closest('.internal-canvas');
+  if (!el) return;
+  
+  const rect = el.getBoundingClientRect();
+  const scale = rect.width / el.offsetWidth;
+  
+  const relX = (event.clientX - rect.left) / scale;
+  const relY = (event.clientY - rect.top) / scale;
+  
+  // 插入點
+  let insertIdx = wire.waypoints.length;
+  for(let i=0; i<wire.waypoints.length; i++) {
+      if (relX < wire.waypoints[i].x) {
+          insertIdx = i;
+          break;
+      }
+  }
+  wire.waypoints.splice(insertIdx, 0, { x: relX, y: relY });
+}
+
+// 🟢 新增：雙擊控制點刪除
+function removeInternalWaypoint(wire, index) {
+  wire.waypoints.splice(index, 1);
+}
+
 function onInternalMouseMove(event) {
+  // 共用的座標計算邏輯
+  const el = event.target.closest('.expanded-container') || event.target;
+  // 簡單防呆，如果找不到 el 就不算 scale，避免報錯
+  const currentScale = (el && el.getBoundingClientRect) 
+    ? (el.getBoundingClientRect().width / el.offsetWidth) 
+    : 1;
+
+  const deltaX = event.clientX - lastInternalMouseX;
+  const deltaY = event.clientY - lastInternalMouseY;
+  lastInternalMouseX = event.clientX;
+  lastInternalMouseY = event.clientY;
+
+  const moveX = deltaX / currentScale;
+  const moveY = deltaY / currentScale;
+
   if (draggingSubComp) {
-    const deltaX = event.clientX - lastInternalMouseX;
-    const deltaY = event.clientY - lastInternalMouseY;
-    lastInternalMouseX = event.clientX;
-    lastInternalMouseY = event.clientY;
-
-    const el = event.target.closest('.expanded-container') || event.target;
-    const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
-    const currentScale = rect ? (rect.width / el.offsetWidth) : 1;
-
-    const moveX = deltaX / currentScale;
-    const moveY = deltaY / currentScale;
-
+    // 拖曳元件
     internalSelectedIds.value.forEach(id => {
         const c = props.comp.internals.components.find(x => x.id === id);
         if (c) {
@@ -206,11 +266,17 @@ function onInternalMouseMove(event) {
             c.y += moveY;
         }
     });
+  } else if (draggingInternalWaypoint) {
+    // 🟢 拖曳控制點
+    const wp = draggingInternalWaypoint.wire.waypoints[draggingInternalWaypoint.index];
+    wp.x += moveX;
+    wp.y += moveY;
   }
 }
 
 function onInternalMouseUp() {
   draggingSubComp = null;
+  draggingInternalWaypoint = null; // 🟢 清除控制點拖曳狀態
   window.removeEventListener('mousemove', onInternalMouseMove);
   window.removeEventListener('mouseup', onInternalMouseUp);
 }
@@ -222,13 +288,14 @@ function handleCanvasMouseDown(event) {
     event.stopPropagation();
     bringToFront();
     
+    // 如果點到的是線條熱區或控制點，不觸發框選
+    if (event.target.classList.contains('wire-hit-area') || event.target.classList.contains('waypoint-handle')) return;
+
     if (event.ctrlKey) {
         isInternalBoxSelecting.value = true;
         boxSelectEl = event.currentTarget; 
-        
         const rect = boxSelectEl.getBoundingClientRect();
         const scale = rect.width / boxSelectEl.offsetWidth;
-        
         const logicX = (event.clientX - rect.left) / scale;
         const logicY = (event.clientY - rect.top) / scale;
         
@@ -245,21 +312,16 @@ function handleCanvasMouseDown(event) {
 
 function onBoxSelectMouseMove(event) {
     if (!boxSelectEl) return;
-    
     const rect = boxSelectEl.getBoundingClientRect();
     const scale = rect.width / boxSelectEl.offsetWidth;
-    
     const currentX = (event.clientX - rect.left) / scale;
     const currentY = (event.clientY - rect.top) / scale;
-    
     const startX = internalSelectionStart.x;
     const startY = internalSelectionStart.y;
-    
     const x = Math.min(startX, currentX);
     const y = Math.min(startY, currentY);
     const w = Math.abs(currentX - startX);
     const h = Math.abs(currentY - startY);
-    
     internalSelectionBox.value = { x, y, w, h };
 }
 
@@ -267,7 +329,6 @@ function onBoxSelectMouseUp() {
     if (internalSelectionBox.value) {
         const box = internalSelectionBox.value;
         const subComps = props.comp.internals?.components || [];
-        
         subComps.forEach(sub => {
             const size = getCompSize(sub);
             if (sub.x < box.x + box.w &&
@@ -278,7 +339,6 @@ function onBoxSelectMouseUp() {
             }
         });
     }
-
     isInternalBoxSelecting.value = false;
     internalSelectionBox.value = null;
     boxSelectEl = null;
@@ -296,7 +356,15 @@ const internalSelectionStyle = computed(() => {
     };
 });
 
-// === Wires & Pins ===
+// === 🟢 連線路徑計算 (支援多段貝茲) ===
+function getSegmentPath(x1, y1, x2, y2) {
+    const dist = Math.abs(x2 - x1);
+    const cpOffset = Math.max(dist * 0.5, 50);
+    const cp1X = x1 + cpOffset;
+    const cp2X = x2 - cpOffset;
+    return `C ${cp1X} ${y1}, ${cp2X} ${y2}, ${x2} ${y2}`;
+}
+
 const inputPins = computed(() => ChipRegistry[props.comp.type]?.inputs || []);
 const inputStates = computed(() => props.comp.inputStates || {});
 
@@ -340,14 +408,14 @@ const allInternalWires = computed(() => {
 
     const endComp = components.find(c => c.id === wire.to);
     if (!endComp) return;
-    const endX = endComp.x ;
+    const endX = endComp.x;
     let endY;
     if (endComp.expanded) {
        const targetInputs = ChipRegistry[endComp.type]?.inputs || [];
        let pinIndex = -1;
        if (wire.toPin) pinIndex = targetInputs.indexOf(wire.toPin);
        else if (targetInputs.length > 0) pinIndex = 0;
-       if (pinIndex !== -1) endY = endComp.y + PANEL_TOP + (pinIndex * PIN_HEIGHT) + PIN_OFFSET_Y;
+       if (pinIndex !== -1) endY = endComp.y + PANEL_TOP + (pinIndex * PIN_HEIGHT) + PIN_OFFSET_Y + 45;
        else endY = endComp.y + PANEL_TOP + 20;
     } else {
        const targetInputs = ChipRegistry[endComp.type]?.inputs || [];
@@ -360,9 +428,28 @@ const allInternalWires = computed(() => {
          endY = endComp.y + 10 + (pinIndex * step);
        }
     }
+    
+    // 🟢 路徑生成 (多段貝茲)
+    const waypoints = wire.waypoints || [];
+    let d = `M ${startX} ${startY}`;
+    let currX = startX;
+    let currY = startY;
+
+    waypoints.forEach(wp => {
+        d += ` ${getSegmentPath(currX, currY, wp.x, wp.y)}`;
+        currX = wp.x;
+        currY = wp.y;
+    });
+    d += ` ${getSegmentPath(currX, currY, endX, endY)}`;
+
     const cp1X = startX + 60;
     const cp2X = endX - 60;
-    renderedWires.push({ path: `M ${startX} ${startY} C ${cp1X} ${startY}, ${cp2X} ${endY}, ${endX} ${endY}`, active: isActive });
+    renderedWires.push({ 
+      path: d,
+      active: isActive,
+      waypoints: waypoints,
+      sourceWire: wire
+    });
   });
 
   if (registry && registry.ioMapping && registry.ioMapping.outputs) {
@@ -395,9 +482,15 @@ const allInternalWires = computed(() => {
         const endX = wallX + DOT_OFFSET_X + 5; 
         const rowH = OUT_PIN_H + OUT_PIN_GAP;
         const endY = PANEL_TOP + (index * rowH) + (OUT_PIN_H / 2) - 40;
+        
         const cp1X = startX + 50;
         const cp2X = endX - 50;
-        renderedWires.push({ path: `M ${startX} ${startY} C ${cp1X} ${startY}, ${cp2X} ${endY}, ${endX} ${endY}`, active: isActive });
+        renderedWires.push({ 
+          path: `M ${startX} ${startY} C ${cp1X} ${startY}, ${cp2X} ${endY}, ${endX} ${endY}`, 
+          active: isActive,
+          waypoints: [], // 外部牆暫不支援控制點 (可選)
+          sourceWire: null
+        });
       }
     });
   }
@@ -458,8 +551,23 @@ const allInternalWires = computed(() => {
 
 .internal-canvas { position: relative; width: 100%; height: 100%; }
 .internal-wires-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; overflow: visible; }
-.wire-path { stroke: #666; transition: stroke 0.2s; fill: none; }
+.wire-path { stroke: #666; transition: stroke 0.2s; fill: none; pointer-events: none; }
 .wire-path.active { stroke: #0f0; filter: drop-shadow(0 0 3px #0f0); }
+
+/* 🟢 互動熱區與控制點樣式 */
+.wire-hit-area { pointer-events: stroke; cursor: crosshair; }
+.wire-hit-area:hover { stroke: rgba(255, 255, 255, 0.1); }
+
+.waypoint-handle {
+  cursor: grab; pointer-events: all;
+  /* transition: all 0.1s ease-out; */
+  transform-origin: center; transform-box: fill-box;
+  fill: #ffbd2e
+}
+.waypoint-handle:hover {
+  fill: #ffbd2e; stroke: #fff; stroke-width: 2px; transform: scale(1.2);
+}
+.waypoint-handle:active { cursor: grabbing; transform: scale(1.2); }
 
 .input-ports-column { position: absolute; left: 0; top: 40px; bottom: 0; width: 40px; display: flex; flex-direction: column; pointer-events: none; }
 .input-port-label { height: 30px; font-size: 10px; color: #ccc; display: flex; align-items: center; justify-content: space-between; padding: 0 4px; border-left: 3px solid #555; position: relative; box-sizing: border-box; }

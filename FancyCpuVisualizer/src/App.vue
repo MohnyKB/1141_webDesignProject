@@ -13,6 +13,18 @@
         
         <div class="panel-bottom-bar">
           <button class="action-btn" @click="runAssembler">Compile & Load</button>
+          
+          <div class="file-actions">
+            <button class="secondary-btn" @click="saveProject">
+              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+              Store
+            </button>
+            <button class="secondary-btn" @click="triggerLoad">
+              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              Load
+            </button>
+            <input type="file" ref="fileInput" class="hidden-input" accept=".json" @change="handleFileLoad">
+          </div>
         </div>
       </div>
 
@@ -27,21 +39,13 @@
         @keydown="handleKeyDown"
         :style="{ cursor: isPanning ? 'grabbing' : 'default' }"
       >
-        <button 
-          v-if="!isEditorOpen" 
-          class="floating-panel-btn"
-          @click="isEditorOpen = true"
-          title="Open Editor"
-        >
+        <button v-if="!isEditorOpen" class="floating-panel-btn" @click="isEditorOpen = true" title="Open Editor">
           <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
         </button>
 
         <h3>Renderer View (Zoom: {{ Math.round(zoom * 100) }}%)</h3>
         
-        <div 
-          class="viewport" 
-          :style="{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }"
-        >
+        <div class="viewport" :style="{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }">
           <svg class="wires-layer">
             <g v-for="(wire, i) in wiresPaths" :key="i">
               <path :d="wire.path" class="wire-path" :class="{ 'active': wire.active }" stroke-width="3" fill="transparent" />
@@ -83,10 +87,10 @@ const PIN_OFFSET_Y = 15;
 const INPUT_DOT_X = 30;
 const DOT_OFFSET_X = -39;
 
-// 🟢 UI 狀態：編輯器開關
+// --- 狀態 ---
 const isEditorOpen = ref(true);
+const fileInput = ref(null); // 檔案輸入框參照
 
-// --- HDL 相關 ---
 const hdlCode = ref(`
 INPUT reset
 INPUT Op
@@ -137,6 +141,218 @@ WIRE Instr3 HackPC Instr3
 
 function runAssembler() { assembleCode(hdlCode.value); }
 
+// ==========================================
+// 🟢 7. Ajax/File 專案儲存邏輯
+// ==========================================
+
+// 儲存專案 (Store)
+function getComponentState(comp) {
+  const state = {
+    id: comp.id,
+    x: comp.x,
+    y: comp.y,
+    expanded: comp.expanded
+  };
+
+  // 如果有內部構造，遞迴儲存
+  if (comp.internals) {
+    // 1. 儲存內部子元件狀態
+    if (comp.internals.components) {
+      state.internalComponents = comp.internals.components.map(getComponentState);
+    }
+    
+    // 2. 儲存內部連線的控制點
+    if (comp.internals.wires) {
+      state.internalWires = comp.internals.wires
+        .filter(w => w.waypoints && w.waypoints.length > 0)
+        .map(w => ({
+          from: w.from,
+          to: w.to,
+          fromPin: w.fromPin,
+          toPin: w.toPin,
+          waypoints: [...w.waypoints] // 複製陣列
+        }));
+    }
+  }
+  return state;
+}
+
+// 儲存專案 (Store)
+function saveProject() {
+  const projectData = {
+    meta: { version: '1.1', timestamp: new Date().toISOString() },
+    hdlCode: hdlCode.value,
+    view: {
+      pan: { ...pan },
+      zoom: zoom.value
+    },
+    // 🟢 使用遞迴函式儲存元件樹
+    components: systemState.components.map(getComponentState),
+    
+    // 儲存最外層連線
+    wires: systemState.wires
+      .filter(w => w.waypoints && w.waypoints.length > 0)
+      .map(w => ({
+        from: w.from,
+        to: w.to,
+        fromPin: w.fromPin,
+        toPin: w.toPin,
+        waypoints: [...w.waypoints]
+      }))
+  };
+
+  const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `cpu_circuit_${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// 輔助：遞迴還原元件狀態
+function applyComponentState(liveComp, savedState) {
+  if (!liveComp || !savedState) return;
+
+  // 還原基本屬性
+  liveComp.x = savedState.x;
+  liveComp.y = savedState.y;
+  liveComp.expanded = savedState.expanded;
+
+  // 還原內部子元件
+  if (liveComp.internals && savedState.internalComponents) {
+    savedState.internalComponents.forEach(savedSub => {
+      const liveSub = liveComp.internals.components.find(c => c.id === savedSub.id);
+      if (liveSub) {
+        applyComponentState(liveSub, savedSub); // 遞迴呼叫
+      }
+    });
+  }
+
+  // 還原內部連線控制點
+  if (liveComp.internals && savedState.internalWires) {
+    savedState.internalWires.forEach(savedWire => {
+      // 在內部連線列表中尋找對應的線
+      const liveWire = liveComp.internals.wires.find(w => 
+        w.from === savedWire.from && 
+        w.to === savedWire.to &&
+        w.fromPin === savedWire.fromPin &&
+        w.toPin === savedWire.toPin
+      );
+      
+      if (liveWire) {
+        liveWire.waypoints = [...savedWire.waypoints];
+      }
+    });
+  }
+}
+
+// 還原專案 (Restore)
+function restoreProject(data) {
+  // 1. 還原代碼與重新組譯
+  if (data.hdlCode) hdlCode.value = data.hdlCode;
+  runAssembler(); // 這會產生全新的、乾淨的元件樹 (預設狀態)
+
+  // 2. 還原視圖
+  if (data.view) {
+    if (data.view.pan) Object.assign(pan, data.view.pan);
+    if (data.view.zoom) zoom.value = data.view.zoom;
+  }
+
+  // 3. 🟢 遞迴還原所有元件狀態 (包含巢狀內部)
+  if (data.components) {
+    data.components.forEach(savedComp => {
+      const liveComp = systemState.components.find(c => c.id === savedComp.id);
+      if (liveComp) {
+        applyComponentState(liveComp, savedComp);
+      }
+    });
+  }
+
+  // 4. 還原最外層連線
+  if (data.wires) {
+    data.wires.forEach(savedWire => {
+      const liveWire = systemState.wires.find(w => 
+        w.from === savedWire.from && 
+        w.to === savedWire.to &&
+        w.fromPin === savedWire.fromPin &&
+        w.toPin === savedWire.toPin
+      );
+      
+      if (liveWire) {
+        liveWire.waypoints = [...savedWire.waypoints];
+      }
+    });
+  }
+}
+
+// 觸發讀取 (Load)
+function triggerLoad() {
+  fileInput.value.click();
+}
+
+// 處理檔案讀取
+function handleFileLoad(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      restoreProject(data);
+    } catch (err) {
+      console.error(err);
+      alert('無法讀取專案檔，格式可能錯誤。');
+    }
+    // 重置 input 以便下次能選同一個檔案
+    event.target.value = '';
+  };
+  reader.readAsText(file);
+}
+
+// 還原專案狀態
+// function restoreProject(data) {
+//   // 1. 還原代碼與組譯 (這會重置 systemState.components/wires)
+//   if (data.hdlCode) hdlCode.value = data.hdlCode;
+//   runAssembler(); // 這一步會根據 Code 產生全新的元件 (位置是預設的)
+
+//   // 2. 還原視圖
+//   if (data.view) {
+//     if (data.view.pan) Object.assign(pan, data.view.pan);
+//     if (data.view.zoom) zoom.value = data.view.zoom;
+//   }
+
+//   // 3. 還原元件位置與狀態 (覆寫組譯器的預設值)
+//   if (data.components) {
+//     data.components.forEach(savedComp => {
+//       const liveComp = systemState.components.find(c => c.id === savedComp.id);
+//       if (liveComp) {
+//         liveComp.x = savedComp.x;
+//         liveComp.y = savedComp.y;
+//         liveComp.expanded = savedComp.expanded;
+//       }
+//     });
+//   }
+
+//   // 4. 還原連線控制點
+//   if (data.wires) {
+//     data.wires.forEach(savedWire => {
+//       // 尋找對應的線條物件
+//       const liveWire = systemState.wires.find(w => 
+//         w.from === savedWire.from && 
+//         w.to === savedWire.to &&
+//         w.fromPin === savedWire.fromPin &&
+//         w.toPin === savedWire.toPin
+//       );
+      
+//       if (liveWire) {
+//         liveWire.waypoints = [...savedWire.waypoints];
+//       }
+//     });
+//   }
+// }
+
 // --- 互動狀態 ---
 const pan = reactive({ x: 0, y: 0 });
 const zoom = ref(1);
@@ -170,7 +386,6 @@ function getWorldMousePos(event) {
 function handleMouseDown(event) {
   if (event.target.closest('.component-wrapper')) return;
   if (event.target.closest('.waypoint-handle')) return;
-  // 🟢 防止點擊懸浮按鈕時觸發畫布拖曳
   if (event.target.closest('.floating-panel-btn')) return;
 
   lastMousePos.x = event.clientX;
@@ -341,7 +556,7 @@ const wiresPaths = computed(() => {
       }
     }
 
-    let endX = endComp.x;
+    let endX = endComp.x ;
     let endY = endComp.y + 40; 
 
     if (endComp.expanded) {
@@ -426,14 +641,13 @@ button, input, select, textarea { font-family: inherit; }
 .main-layout { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .workspace { display: flex; flex-grow: 1; overflow: hidden; position: relative; }
 
-/* 🟢 Editor Panel Style */
 .editor-panel { 
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   width: 250px; 
   background: #1e1e1e; border-right: 1px solid #333;
   display: flex; flex-direction: column; z-index: 20; 
   box-shadow: 2px 0 10px rgba(0,0,0,0.3); 
-  flex-shrink: 0; /* 防止被擠壓 */
+  flex-shrink: 0;
 }
 
 .panel-top-bar {
@@ -456,20 +670,33 @@ button, input, select, textarea { font-family: inherit; }
 }
 .editor-panel textarea:focus { background: #222; }
 
-.panel-bottom-bar { padding: 10px; border-top: 1px solid #333; background: #252526; }
+.panel-bottom-bar { 
+  padding: 10px; border-top: 1px solid #333; background: #252526; 
+  display: flex; flex-direction: column; gap: 8px;
+}
 .action-btn {
   width: 100%; background: #007fd4; color: white; border: none; padding: 8px;
   border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s;
 }
 .action-btn:hover { background: #0060a0; }
 
-/* 🟢 Canvas Panel & Floating Button */
+.file-actions {
+  display: flex; gap: 8px;
+}
+.secondary-btn {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: #333; color: #ccc; border: 1px solid #444; padding: 6px;
+  border-radius: 4px; cursor: pointer; font-size: 12px; transition: all 0.2s;
+}
+.secondary-btn:hover { background: #444; color: #fff; }
+.hidden-input { display: none; }
+
 .canvas-panel { 
   flex-grow: 1; position: relative; background: #121212; overflow: hidden; color: #fff; user-select: none; outline: none;
 }
 
 .floating-panel-btn {
-  position: absolute; top: 50px; left: 10px; z-index: 100;
+  position: absolute; top: 10px; left: 10px; z-index: 100;
   background: rgba(30, 30, 30, 0.8); color: #ccc;
   border: 1px solid #444; border-radius: 6px;
   padding: 6px; cursor: pointer; backdrop-filter: blur(4px);
@@ -477,7 +704,6 @@ button, input, select, textarea { font-family: inherit; }
 }
 .floating-panel-btn:hover { background: #333; color: #fff; border-color: #666; transform: translateY(1px); }
 
-/* 其他樣式維持不變 */
 .selection-box { position: absolute; border: 1px solid #00a8ff; background-color: rgba(0, 168, 255, 0.2); pointer-events: none; z-index: 9999; }
 .viewport { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-origin: 0 0; }
 .wires-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; overflow: visible; }
@@ -485,8 +711,13 @@ button, input, select, textarea { font-family: inherit; }
 .wire-path.active { stroke: #0f0; filter: drop-shadow(0 0 3px #0f0); }
 .wire-hit-area { pointer-events: stroke; cursor: crosshair; }
 .wire-hit-area:hover { stroke: rgba(255, 255, 255, 0.1); }
-.waypoint-handle { cursor: grab; pointer-events: all; transform-origin: center; transform-box: fill-box; fill:#ffbd2e;}
-.waypoint-handle:hover { fill: #ffbd2e; stroke: #fff; stroke-width: 2px; transform: scale(1.2); }
+.waypoint-handle { 
+  cursor: grab; pointer-events: all;
+  transform-origin: center; transform-box: fill-box; fill: #ffbd2e;
+}
+.waypoint-handle:hover { 
+  fill: #ffbd2e; stroke: #fff; stroke-width: 2px; transform: scale(1.2); 
+}
 .waypoint-handle:active { cursor: grabbing; transform: scale(1.2); }
 .helper-text { position: absolute; bottom: 10px; right: 10px; color: #666; font-size: 12px; pointer-events: none; }
 </style>
