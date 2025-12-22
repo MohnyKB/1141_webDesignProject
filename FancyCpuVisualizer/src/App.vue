@@ -119,13 +119,22 @@
           
           <div v-if="selectionBox" class="selection-box" :style="selectionBoxStyle"></div>
         </div>
-        
+        <a href="https://github.com/Harry-55" target="_blank" class="top-right-link" title="前往我的文件/作品集">
+          <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <line x1="10" y1="9" x2="8" y2="9"></line>
+          </svg>
+        </a>
         <div class="helper-text">
           Ctrl+Drag Select • Scroll Zoom • DblClick Wire to Add Point • Drag Points to Adjust
         </div>
       </div>
     </div> <ControlPanel />
   </div>
+  
 </template>
 
 <script setup>
@@ -886,4 +895,35 @@ button, input, select, textarea { font-family: inherit; }
 .tabs { display: flex; margin-bottom: 10px; gap: 5px; }
 .tabs button { flex: 1; background: #333; border: none; color: #aaa; padding: 5px; cursor: pointer; }
 .tabs button.active { background: #007fd4; color: white; }
+/* src/App.vue 的 <style scoped> 區塊 */
+
+.top-right-link {
+  position: absolute;
+  top: 15px;      /* 距離頂部 15px */
+  right: 15px;    /* 距離右側 15px */
+  z-index: 100;   /* 確保浮在最上層 */
+  
+  width: 40px;
+  height: 40px;
+  background: rgba(30, 30, 30, 0.8); /* 半透明深色背景 */
+  color: #ccc;
+  border: 1px solid #444;
+  border-radius: 50%; /* 圓形按鈕 */
+  
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+  transition: all 0.2s;
+  backdrop-filter: blur(4px); /* 毛玻璃效果 */
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.top-right-link:hover {
+  background: #333;
+  color: #fff;
+  border-color: #666;
+  transform: translateY(1px); /* 按下去的微動感 */
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
 </style>
