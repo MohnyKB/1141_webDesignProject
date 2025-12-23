@@ -9,9 +9,7 @@ export const systemState = reactive({
   clock: 0 
 });
 
-/**
- * 1. 組譯代碼
- */
+//組譯
 export function assembleCode(code) {
   systemState.components = [];
   systemState.wires = []; 
@@ -22,7 +20,7 @@ export function assembleCode(code) {
   const parsedComponents = [];
   const tempWires = [];
 
-  // 第一遍：建立元件
+  // 第一次迴圈 : 初始化 : 建立元件
   lines.forEach(line => {
     const parts = line.split(/\s+/);
     if (parts.length < 2) return;
@@ -55,7 +53,7 @@ export function assembleCode(code) {
     }
   });
 
-  // 第二遍：處理連線
+  // 第二次迴圈：處理連線
   lines.forEach(line => {
     const parts = line.split(/\s+/);
     if (parts.length < 2) return;
@@ -83,14 +81,12 @@ export function assembleCode(code) {
       tempWires.push({ from: sourceId, to: targetId, fromPin, toPin });
     }
   });
-  
-  // 🟢 邏輯修正：根據連線目標的 Pin 順序對 INPUT 元件排序
+
   const inputComps = parsedComponents.filter(c => c.type === 'INPUT');
   const nonInputComps = parsedComponents.filter(c => c.type !== 'INPUT');
   
   let mainTargetComp = null;
   
-  // 啟發式：尋找第一個非 INPUT 元件，且有 INPUT 元件連線到它 (即主要目標)
   for (const targetComp of nonInputComps) {
     const hasInputWire = tempWires.some(w => w.to === targetComp.id && inputComps.some(i => i.id === w.from));
     if (hasInputWire) {
@@ -103,10 +99,9 @@ export function assembleCode(code) {
 
   if (mainTargetComp) {
     const mainTargetDef = ChipRegistry[mainTargetComp.type];
-    // 取得目標元件定義的輸入腳位順序 (例如: ['Instr0', 'Instr1', 'Op', 'reset'])
     const targetInputPins = mainTargetDef?.inputs || []; 
 
-    // 1. 建立 Input ID -> Target Pin Name 的對應表
+    // node的查表邏輯
     const inputToPinMap = {};
     tempWires.filter(w => w.to === mainTargetComp.id && w.toPin).forEach(w => {
       if (inputComps.some(i => i.id === w.from)) {
@@ -114,10 +109,9 @@ export function assembleCode(code) {
       }
     });
 
-    // 2. 依照目標元件的輸入腳位順序，建立新的 INPUT 元件列表
+    // 實例化node
     const newOrder = [];
     targetInputPins.forEach(pinName => {
-      // 找到哪個 INPUT 元件連到了這個 pinName
       const inputId = Object.keys(inputToPinMap).find(id => inputToPinMap[id] === pinName);
 
       if (inputId) {
@@ -126,29 +120,23 @@ export function assembleCode(code) {
       }
     });
     
-    // 3. 將未連線到主要目標元件的 INPUT 元件排在最後
+    // node接線實例化
     const connectedIds = newOrder.map(c => c.id);
     const unconnectedInputs = inputComps.filter(c => !connectedIds.includes(c.id));
     
     sortedInputComps = [...newOrder, ...unconnectedInputs];
   }
-
-  // 4. Final assignment to systemState
   systemState.components = parsedComponents;
   systemState.wires = tempWires;
   
-  // 🟢 執行自動排版，並將排序好的 INPUT 列表傳入
   applyAutoLayout(systemState.components, sortedInputComps);
-
+  
+  //結束後執行邏輯運算
   evaluateSystem();
 }
 
-/**
- * 🟢 自動排版算法 (更新)
- * 接收一個 sortedInputComps 參數，並根據這個列表來排版 INPUT 元件
- */
+//處理排版的演算法
 function applyAutoLayout(components, sortedInputComps) {
-  // 版面設定常數
   const INPUT_X = 50;
   const INPUT_START_Y = 50;
   const INPUT_GAP_Y = 100; 
@@ -159,12 +147,9 @@ function applyAutoLayout(components, sortedInputComps) {
   const CELL_H = 300; 
   const COLS = 3;     
 
-  // 1. Handle INPUT components based on the sorted list
   let inputCount = 0;
   
-  // 🟢 根據傳入的 sortedInputComps 列表來排版 INPUT 元件
   sortedInputComps.forEach(comp => {
-    // 只有在座標缺失時才自動排版
     if ((comp.x === undefined || isNaN(comp.x) || comp.y === undefined || isNaN(comp.y)) && comp.type === 'INPUT') {
         comp.x = INPUT_X;
         comp.y = INPUT_START_Y + (inputCount * INPUT_GAP_Y);
@@ -172,7 +157,6 @@ function applyAutoLayout(components, sortedInputComps) {
     }
   });
 
-  // 2. Handle non-INPUT components (Grid layout)
   let mainCount = 0;
   components.forEach(comp => {
     if (comp.type === 'INPUT') return; 
@@ -208,6 +192,7 @@ function buildInternals(type) {
   return internals;
 }
 
+//sequential system的更新邏輯
 export function tickSystem() {
   systemState.clock++;
   updateDFFs(systemState.components);
@@ -226,6 +211,7 @@ function updateDFFs(components) {
   });
 }
 
+// combinationnal system的更新邏輯
 export function evaluateSystem() {
   let stabilized = false;
   let iterations = 0;
@@ -315,6 +301,7 @@ function simulateScope(components, wires, parentInputs = {}, scopeInputs = {}) {
   return scopeChanged;
 }
 
+// 最底層邏輯運算
 function calculateLogic(type, inputsMap, currentValue) {
   if (type === 'INPUT') return currentValue;
   if (type === 'DFF') return currentValue;
@@ -366,6 +353,7 @@ function getInputs(targetComp, wires, components, parentInputs, scopeInputs) {
   return inputMap;
 }
 
+//當調整input時，呼叫combinational system重新進行運算
 export function toggleInput(componentId) {
   const comp = systemState.components.find(c => c.id === componentId);
   if (comp && comp.type === 'INPUT') {
