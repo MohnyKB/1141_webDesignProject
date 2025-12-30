@@ -119,7 +119,7 @@
           
           <div v-if="selectionBox" class="selection-box" :style="selectionBoxStyle"></div>
         </div>
-        <a href="https://drive.google.com/file/d/1Wxe9YNevUd38regD79W2pr89SFyxsBtv/view?usp=sharing" target="_blank" class="top-right-link" title="前往我的文件/作品集">
+          <a href="https://drive.google.com/file/d/1Wxe9YNevUd38regD79W2pr89SFyxsBtv/view?usp=sharing" target="_blank" class="top-right-link" title="前往我的文件/作品集">
           <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
             <polyline points="14 2 14 8 20 8"></polyline>
@@ -221,7 +221,9 @@ function getComponentState(comp) {
     y: comp.y,
     expanded: comp.expanded
   };
-
+  if (comp.outputWireLayouts) {
+    state.outputWireLayouts = comp.outputWireLayouts;
+  }
   // 如果有內部構造，遞迴儲存
   if (comp.internals) {
     // 1. 儲存內部子元件狀態
@@ -286,7 +288,9 @@ function applyComponentState(liveComp, savedState) {
   liveComp.x = savedState.x;
   liveComp.y = savedState.y;
   liveComp.expanded = savedState.expanded;
-
+  if (savedState.outputWireLayouts) {
+    liveComp.outputWireLayouts = JSON.parse(JSON.stringify(savedState.outputWireLayouts));
+  }
   // 還原內部子元件
   if (liveComp.internals && savedState.internalComponents) {
     savedState.internalComponents.forEach(savedSub => {
@@ -452,7 +456,7 @@ function getWorldMousePos(event) {
 }
 
 function handleMouseDown(event) {
-  if (event.target.closest('.component-wrapper')) return;
+  // if (event.target.closest('.component-wrapper')) return;
   if (event.target.closest('.waypoint-handle')) return;
   if (event.target.closest('.floating-panel-btn')) return;
 
