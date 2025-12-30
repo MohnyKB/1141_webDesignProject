@@ -2,7 +2,7 @@
   <div 
     class="component-wrapper" 
     :style="{ left: comp.x + 'px', top: comp.y + 'px', zIndex: currentZIndex }"
-    @mousedown.stop="bringToFront"
+    @mousedown="bringToFront"
   >
    <div 
       v-if="!comp.expanded"
@@ -65,12 +65,16 @@
               class="waypoint-handle"
               @mousedown.stop="startDragInternalWaypoint($event, wire.sourceWire, idx)"
               @dblclick.stop="removeInternalWaypoint(wire.sourceWire, idx)"
+              @wheel.stop.prevent="handleWaypointWheel($event, wire.sourceWire, idx)"
             />
           </g>
         </svg>
 
         <div class="input-ports-column">
-          <div v-for="pin in inputPins" :key="pin" class="input-port-label">
+          <div v-for="pin in inputPins" :key="pin" 
+               class="input-port-label"
+               @wheel.stop.prevent="handleInputPortWheel($event, pin)"
+          >
             <span class="pin-text">{{ pin }}</span>
             <div class="port-dot" :class="{ active: Number(inputStates[pin]) === 1 }"></div>
           </div>
@@ -89,7 +93,9 @@
 
       <div class="output-pins-panel">
         <div v-for="(val, name) in comp.outputStates" :key="name" 
-             class="output-pin" :class="{ 'on': Number(val) === 1 }">
+             class="output-pin" :class="{ 'on': Number(val) === 1 }"
+             @wheel.stop.prevent="handleOutputPortWheel($event, name)"
+        >
           <div class="port-dot-left" :class="{active: Number(val) === 1}"></div>
           <span class="pin-name">{{ name }}</span>
           <span class="pin-led"></span>
@@ -123,7 +129,6 @@ const props = defineProps(['comp', 'isSelected']);
 const emit = defineEmits(['startDrag']);
 
 // === 狀態管理 ===
-const isActive = ref(false);
 const internalSelectedIds = ref(new Set()); 
 const isInternalBoxSelecting = ref(false);
 const internalSelectionStart = reactive({ x: 0, y: 0 });
@@ -152,7 +157,7 @@ function getCompSize(c) {
     c.internals.components.forEach(sub => {
       const subSize = getCompSize(sub);
       const right = sub.x + subSize.w;
-      const bottom = sub.y + subSize.h;
+      const bottom = sub.y + subSize.h + HEADER_HEIGHT; 
       if (right > maxW) maxW = right;
       if (bottom > maxH) maxH = bottom;
     });
@@ -171,9 +176,9 @@ const dynamicStyle = computed(() => {
   return { width: size.w + 'px', height: size.h + 'px' };
 });
 
-// === 🟢 內部互動邏輯 (元件拖曳 + 貝茲曲線拖曳) ===
+// === 內部互動邏輯 ===
 let draggingSubComp = null;
-let draggingInternalWaypoint = null; // 🟢 貝茲曲線控制點狀態
+let draggingInternalWaypoint = null;
 let lastInternalMouseX = 0;
 let lastInternalMouseY = 0;
 
@@ -198,7 +203,6 @@ function handleInternalDrag(event, subComp) {
   window.addEventListener('mouseup', onInternalMouseUp);
 }
 
-// 🟢 新增：開始拖曳內部控制點
 function startDragInternalWaypoint(event, wire, index) {
   event.stopPropagation();
   bringToFront();
@@ -211,21 +215,24 @@ function startDragInternalWaypoint(event, wire, index) {
   window.addEventListener('mouseup', onInternalMouseUp);
 }
 
-// 🟢 新增：雙擊連線新增控制點
 function addInternalWaypoint(event, wire) {
+  if (wire && wire._isOutputWire) {
+    if (!props.comp.outputWireLayouts) props.comp.outputWireLayouts = {};
+    if (!props.comp.outputWireLayouts[wire._pinName]) {
+       props.comp.outputWireLayouts[wire._pinName] = [];
+       wire.waypoints = props.comp.outputWireLayouts[wire._pinName];
+    }
+  }
+
   if (!wire.waypoints) wire.waypoints = [];
   
-  // 計算相對於 .internal-canvas 的座標
   const el = event.target.closest('.internal-canvas');
   if (!el) return;
-  
   const rect = el.getBoundingClientRect();
   const scale = rect.width / el.offsetWidth;
-  
   const relX = (event.clientX - rect.left) / scale;
   const relY = (event.clientY - rect.top) / scale;
   
-  // 插入點
   let insertIdx = wire.waypoints.length;
   for(let i=0; i<wire.waypoints.length; i++) {
       if (relX < wire.waypoints[i].x) {
@@ -233,18 +240,72 @@ function addInternalWaypoint(event, wire) {
           break;
       }
   }
-  wire.waypoints.splice(insertIdx, 0, { x: relX, y: relY });
+  // 預設曲率：初始化 In/Out 屬性
+  wire.waypoints.splice(insertIdx, 0, { 
+    x: relX, y: relY, 
+    curvature: 0.5,
+    curvatureIn: 0.5,
+    curvatureOut: 0.5
+  });
 }
 
-// 🟢 新增：雙擊控制點刪除
 function removeInternalWaypoint(wire, index) {
   wire.waypoints.splice(index, 1);
 }
 
+function handleWaypointWheel(event, wire, index) {
+  event.stopPropagation();
+  event.preventDefault(); 
+
+  const wp = wire.waypoints[index];
+  if (wp.curvature === undefined) wp.curvature = 0.5;
+  if (wp.curvatureIn === undefined) wp.curvatureIn = wp.curvature;
+  if (wp.curvatureOut === undefined) wp.curvatureOut = wp.curvature;
+
+  const delta = event.deltaY > 0 ? -0.05 : 0.05;
+
+  if (event.shiftKey) {
+    wp.curvatureIn = Math.max(0.1, Math.min(2.0, wp.curvatureIn + delta));
+  } else if (event.altKey) {
+    wp.curvatureOut = Math.max(0.1, Math.min(2.0, wp.curvatureOut + delta));
+  } else {
+    wp.curvatureIn = Math.max(0.1, Math.min(2.0, wp.curvatureIn + delta));
+    wp.curvatureOut = Math.max(0.1, Math.min(2.0, wp.curvatureOut + delta));
+    wp.curvature = wp.curvatureIn;
+  }
+}
+
+// Input Port 滾輪事件 (支援 Shift/Alt 單邊調整，預設同步調整)
+function handleInputPortWheel(event, pinName) {
+  event.stopPropagation();
+  event.preventDefault(); // 🟢 關鍵：阻止瀏覽器預設的縮放行為
+  
+  if (!props.comp.inputWireCurvatures) props.comp.inputWireCurvatures = {};
+  
+  // 取得當前值 (可能是數字，也可能是物件，視未來擴充需求而定，目前簡化為單一數字作為 Start Curvature)
+  const currentVal = props.comp.inputWireCurvatures[pinName] ?? 0.5;
+  const delta = event.deltaY > 0 ? -0.05 : 0.05;
+  
+  // 這裡我們暫時只支援一個數值控制「出發力度」 (Start Point 的 curvatureOut)
+  props.comp.inputWireCurvatures[pinName] = Math.max(0.1, Math.min(2.0, currentVal + delta));
+}
+
+// Output Port 滾輪事件
+function handleOutputPortWheel(event, pinName) {
+  event.stopPropagation();
+  event.preventDefault(); // 🟢 關鍵：阻止瀏覽器預設的縮放行為
+
+  if (!props.comp.outputWireCurvatures) props.comp.outputWireCurvatures = {};
+  
+  const currentVal = props.comp.outputWireCurvatures[pinName] ?? 0.5;
+  const delta = event.deltaY > 0 ? -0.05 : 0.05;
+  
+  // 控制「進入力度」 (End Point 的 curvatureIn)
+  props.comp.outputWireCurvatures[pinName] = Math.max(0.1, Math.min(2.0, currentVal + delta));
+}
+
 function onInternalMouseMove(event) {
-  // 共用的座標計算邏輯
   const el = event.target.closest('.expanded-container') || event.target;
-  // 簡單防呆，如果找不到 el 就不算 scale，避免報錯
   const currentScale = (el && el.getBoundingClientRect) 
     ? (el.getBoundingClientRect().width / el.offsetWidth) 
     : 1;
@@ -258,7 +319,6 @@ function onInternalMouseMove(event) {
   const moveY = deltaY / currentScale;
 
   if (draggingSubComp) {
-    // 拖曳元件
     internalSelectedIds.value.forEach(id => {
         const c = props.comp.internals.components.find(x => x.id === id);
         if (c) {
@@ -267,7 +327,6 @@ function onInternalMouseMove(event) {
         }
     });
   } else if (draggingInternalWaypoint) {
-    // 🟢 拖曳控制點
     const wp = draggingInternalWaypoint.wire.waypoints[draggingInternalWaypoint.index];
     wp.x += moveX;
     wp.y += moveY;
@@ -276,7 +335,7 @@ function onInternalMouseMove(event) {
 
 function onInternalMouseUp() {
   draggingSubComp = null;
-  draggingInternalWaypoint = null; // 🟢 清除控制點拖曳狀態
+  draggingInternalWaypoint = null;
   window.removeEventListener('mousemove', onInternalMouseMove);
   window.removeEventListener('mouseup', onInternalMouseUp);
 }
@@ -285,13 +344,11 @@ function onInternalMouseUp() {
 let boxSelectEl = null;
 
 function handleCanvasMouseDown(event) {
-    event.stopPropagation();
     bringToFront();
-    
-    // 如果點到的是線條熱區或控制點，不觸發框選
     if (event.target.classList.contains('wire-hit-area') || event.target.classList.contains('waypoint-handle')) return;
 
     if (event.ctrlKey) {
+        event.stopPropagation(); 
         isInternalBoxSelecting.value = true;
         boxSelectEl = event.currentTarget; 
         const rect = boxSelectEl.getBoundingClientRect();
@@ -356,28 +413,101 @@ const internalSelectionStyle = computed(() => {
     };
 });
 
-// === 🟢 連線路徑計算 (支援多段貝茲) ===
-function getSegmentPath(x1, y1, x2, y2) {
-    const dist = Math.abs(x2 - x1);
-    const cpOffset = Math.max(dist * 0.5, 50);
-    const cp1X = x1 + cpOffset;
-    const cp2X = x2 - cpOffset;
-    return `C ${cp1X} ${y1}, ${cp2X} ${y2}, ${x2} ${y2}`;
+// === 平滑路徑算法 ===
+
+function getDistance(p1, p2) {
+  return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
 }
 
+function getControlPoint(current, prev, next, dir) {
+  let tension = 0.5;
+  
+  if (dir === 'start') {
+      tension = current.curvatureOut ?? current.curvature ?? 0.5;
+      if (!next) tension = 0.5; 
+  } else { 
+      tension = current.curvatureIn ?? current.curvature ?? 0.5;
+      if (!prev) tension = 0.5;
+  }
+  
+  // 起點：強制水平向右
+  if (!prev) {
+    const distToNext = next ? getDistance(current, next) : 100;
+    const len = Math.min(distToNext * 0.5, 100) * tension; 
+    return { x: current.x + len, y: current.y };
+  }
+
+  // 終點：強制水平向左
+  if (!next) {
+    const distToPrev = prev ? getDistance(current, prev) : 100;
+    const len = Math.min(distToPrev * 0.5, 100) * tension;
+    return { x: current.x - len, y: current.y };
+  }
+
+  const dx = next.x - prev.x;
+  const dy = next.y - prev.y;
+  const dist = Math.sqrt(dx*dx + dy*dy) || 1; 
+  const uX = dx / dist;
+  const uY = dy / dist;
+
+  const segmentDist = dir === 'start' ? getDistance(current, next) : getDistance(prev, current);
+  const handleLen = segmentDist * tension * 0.4; 
+
+  if (dir === 'start') {
+    return { x: current.x + uX * handleLen, y: current.y + uY * handleLen };
+  } else {
+    return { x: current.x - uX * handleLen, y: current.y - uY * handleLen };
+  }
+}
+
+function generateSmoothPath(points) {
+  if (points.length < 2) return "";
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const pStart = points[i];
+    const pEnd = points[i+1];
+    const prevNode = points[i-1] || null;
+    const nextNode = points[i+2] || null;
+
+    const cp1 = getControlPoint(pStart, prevNode, pEnd, 'start');
+    const cp2 = getControlPoint(pEnd, pStart, nextNode, 'end');
+    d += ` C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${pEnd.x} ${pEnd.y}`;
+  }
+  return d;
+}
+
+// === 渲染計算 ===
 const inputPins = computed(() => ChipRegistry[props.comp.type]?.inputs || []);
 const inputStates = computed(() => props.comp.inputStates || {});
 
 const allInternalWires = computed(() => {
   if (!props.comp.internals || !props.comp.internals.wires) return [];
+  
   const wires = props.comp.internals.wires;
   const components = props.comp.internals.components;
   const inputs = inputPins.value;
   const registry = ChipRegistry[props.comp.type];
   const renderedWires = [];
 
+  const createRenderObject = (startX, startY, endX, endY, isActive, wire, waypoints, startCurvature, endCurvature) => {
+    const allPoints = [
+      { x: startX, y: startY, curvatureOut: startCurvature }, 
+      ...(waypoints || []).map(wp => ({ ...wp })), 
+      { x: endX, y: endY, curvatureIn: endCurvature }         
+    ];
+    const fullPath = generateSmoothPath(allPoints);
+    renderedWires.push({ 
+      path: fullPath,
+      active: isActive,
+      waypoints: waypoints || [],
+      sourceWire: wire
+    });
+  };
+
   wires.forEach(wire => {
     let startX, startY, isActive = false;
+    let startCurvature = undefined; 
+
     const sourceComp = components.find(c => c.id === wire.from);
 
     if (sourceComp) {
@@ -404,6 +534,8 @@ const allInternalWires = computed(() => {
        startX = INPUT_DOT_X; 
        startY = PANEL_TOP + (index * PIN_HEIGHT) + PIN_OFFSET_Y;
        isActive = Number(inputStates.value[wire.from]) === 1; 
+       
+       startCurvature = props.comp.inputWireCurvatures?.[wire.from];
     } else { return; }
 
     const endComp = components.find(c => c.id === wire.to);
@@ -429,27 +561,7 @@ const allInternalWires = computed(() => {
        }
     }
     
-    // 🟢 路徑生成 (多段貝茲)
-    const waypoints = wire.waypoints || [];
-    let d = `M ${startX} ${startY}`;
-    let currX = startX;
-    let currY = startY;
-
-    waypoints.forEach(wp => {
-        d += ` ${getSegmentPath(currX, currY, wp.x, wp.y)}`;
-        currX = wp.x;
-        currY = wp.y;
-    });
-    d += ` ${getSegmentPath(currX, currY, endX, endY)}`;
-
-    const cp1X = startX + 60;
-    const cp2X = endX - 60;
-    renderedWires.push({ 
-      path: d,
-      active: isActive,
-      waypoints: waypoints,
-      sourceWire: wire
-    });
+    createRenderObject(startX, startY, endX, endY, isActive, wire, wire.waypoints, startCurvature, undefined);
   });
 
   if (registry && registry.ioMapping && registry.ioMapping.outputs) {
@@ -483,14 +595,15 @@ const allInternalWires = computed(() => {
         const rowH = OUT_PIN_H + OUT_PIN_GAP;
         const endY = PANEL_TOP + (index * rowH) + (OUT_PIN_H / 2) - 40;
         
-        const cp1X = startX + 50;
-        const cp2X = endX - 50;
-        renderedWires.push({ 
-          path: `M ${startX} ${startY} C ${cp1X} ${startY}, ${cp2X} ${endY}, ${endX} ${endY}`, 
-          active: isActive,
-          waypoints: [], // 外部牆暫不支援控制點 (可選)
-          sourceWire: null
-        });
+        const storedWaypoints = props.comp.outputWireLayouts?.[outName] || [];
+        
+        const endCurvature = props.comp.outputWireCurvatures?.[outName];
+
+        createRenderObject(startX, startY, endX, endY, isActive, {
+             _isOutputWire: true,
+             _pinName: outName,
+             waypoints: storedWaypoints
+          }, storedWaypoints, undefined, endCurvature);
       }
     });
   }
@@ -570,15 +683,39 @@ const allInternalWires = computed(() => {
 .waypoint-handle:active { cursor: grabbing; transform: scale(1.2); }
 
 .input-ports-column { position: absolute; left: 0; top: 40px; bottom: 0; width: 40px; display: flex; flex-direction: column; pointer-events: none; }
-.input-port-label { height: 30px; font-size: 10px; color: #ccc; display: flex; align-items: center; justify-content: space-between; padding: 0 4px; border-left: 3px solid #555; position: relative; box-sizing: border-box; }
+/* 🟢 修正：強制讓 Input Label 可以接收事件 */
+.input-port-label { 
+  height: 30px; font-size: 10px; color: #ccc; 
+  display: flex; align-items: center; justify-content: space-between; 
+  padding: 0 4px; border-left: 3px solid #555; position: relative; 
+  box-sizing: border-box; 
+  pointer-events: auto; /* 確保滑鼠事件能觸發 */
+}
 .pin-text { transform: scale(0.9); transform-origin: left center; }
-.port-dot { width: 8px; height: 8px; background: #555; border: 1px solid #777; border-radius: 50%; margin-right: -4px; z-index: 2; }
+/* 🟢 修正：強制讓 Dot 可以接收事件 */
+.port-dot { 
+  width: 8px; height: 8px; background: #555; border: 1px solid #777; 
+  border-radius: 50%; margin-right: -4px; z-index: 2; 
+  pointer-events: auto; cursor: pointer; 
+}
 .port-dot.active { background: #0f0; box-shadow: 0 0 5px #0f0; border-color: #0f0; }
 
 .output-pins-panel { position: absolute; right: auto; left: 100%; margin-left: -25px; top: 40px; display: flex; flex-direction: column; gap: 5px; pointer-events: none; }
-.output-pin { height: 30px; background: #222; color: #fff; padding: 0 10px; font-size: 12px; border: 1px solid #444; border-radius: 4px; display: flex; align-items: center; position: relative; box-sizing: border-box; }
+/* 🟢 修正：強制讓 Output Pin 可以接收事件 */
+.output-pin { 
+  height: 30px; background: #222; color: #fff; 
+  padding: 0 10px; font-size: 12px; border: 1px solid #444; 
+  border-radius: 4px; display: flex; align-items: center; 
+  position: relative; box-sizing: border-box; 
+  pointer-events: auto; 
+}
 .output-pin.on { border-color: #0f0; box-shadow: 0 0 5px #0f0; }
-.port-dot-left { position: absolute; left: -14px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; background: #555; border-radius: 50%; }
+/* 🟢 修正：強制讓 Dot 可以接收事件 */
+.port-dot-left { 
+  position: absolute; left: -14px; top: 50%; transform: translateY(-50%); 
+  width: 8px; height: 8px; background: #555; border-radius: 50%; 
+  pointer-events: auto; cursor: pointer; 
+}
 .port-dot-left.active { background: #0f0; box-shadow: 0 0 5px #0f0; }
 .pin-led { width: 8px; height: 8px; background: #444; border-radius: 50%; margin-left: 8px; }
 .output-pin.on .pin-led { background: #0f0; box-shadow: 0 0 5px #0f0; }
